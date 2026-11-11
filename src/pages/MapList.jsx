@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { canManageContent } from "../lib/mapAccess";
+import { useMapImage } from "../lib/mapImages";
 import Loading from "../components/Loading";
 import ErrorMessage from "../components/ErrorMessage";
 import AuthButton from "../components/AuthButton";
@@ -14,6 +15,26 @@ import SaveToMyListButton from "../components/SaveToMyListButton";
 import ThreeDotMenu, {
   MenuItem,
 } from "../components/ThreeDotMenu";
+
+function MapThumbnail({ map }) {
+  const { src, loading, imageContainer } = useMapImage(map.image_url, true);
+
+  return (
+    <div ref={imageContainer} className="h-40 overflow-hidden rounded-t-2xl bg-rose-100">
+      {src ? (
+        <img
+          src={src}
+          alt={map.title}
+          className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
+        />
+      ) : (
+        <div className="grid h-full place-items-center text-sm text-slate-600">
+          {loading ? "画像を読み込み中…" : "画像を読み込めませんでした"}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * マップ一覧ページ．
@@ -1270,13 +1291,7 @@ export default function MapList({ currentUser, authChecked, isAdmin }) {
 
               <Link to={`/maps/${map.id}`} className="block">
                 {map.image_url ? (
-                  <div className="overflow-hidden rounded-t-2xl bg-rose-100">
-                    <img
-                      src={map.image_url}
-                      alt={map.title}
-                      className="h-40 w-full object-cover transition duration-300 group-hover:scale-[1.03]"
-                    />
-                  </div>
+                  <MapThumbnail map={map} />
                 ) : (
                   <div className="grid h-40 w-full place-items-center rounded-t-2xl bg-rose-100 text-3xl">
                     🗺️

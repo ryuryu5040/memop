@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { getPinEmoji } from "../lib/pinTypes";
+import { useMapImage } from "../lib/mapImages";
 import { EmojiPin } from "./EmojiPin"
 
 /**
@@ -21,6 +22,8 @@ import { EmojiPin } from "./EmojiPin"
 
 
 export function MapView({ map, pins = [], pendingPin = null, onPinClick, onMapClick, onPinDoubleClick, movablePinId, onPinMove, }) {
+  const { src: imageSrc, loading: imageLoading } = useMapImage(map?.image_url);
+
   // 拡大率（scale）、最大拡大率（maxScale）のStateを管理
   const [scale, setScale] = useState(1);
   const [maxScale, setMaxScale] = useState(2); // フォールバック用初期値
@@ -115,11 +118,15 @@ export function MapView({ map, pins = [], pendingPin = null, onPinClick, onMapCl
     };
   }, []);
 
-  if (!map?.image_url) {
+  if (!imageSrc) {
+    let message = "地図画像がありません";
+    if (imageLoading) message = "地図画像を読み込み中…";
+    else if (map?.image_url) message = "地図画像を読み込めませんでした";
+
     return (
       <div className="grid h-full w-full place-items-center bg-slate-200 text-slate-500">
         <div className="text-center">
-          <p className="text-lg font-bold">地図画像がありません</p>
+          <p className="text-lg font-bold">{message}</p>
           <p className="mt-2 text-sm">
             {map?.title || "未選択"} / ピン {pins.length} 件
           </p>
@@ -291,7 +298,7 @@ export function MapView({ map, pins = [], pendingPin = null, onPinClick, onMapCl
         >
           <img
             ref={imgRef}
-            src={map.image_url}
+            src={imageSrc}
             alt={map.title || "マップ画像"}
             onClick={handleImageClick}
             onLoad={handleImageLoad}
