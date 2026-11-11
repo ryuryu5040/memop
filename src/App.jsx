@@ -10,6 +10,7 @@ import MapList from "./pages/MapList.jsx";
 import MapUpload from "./pages/MapUpload.jsx";
 import MapDetail from "./pages/MapDetail.jsx";
 import AdminMaps from "./pages/AdminMaps.jsx";
+import AdminUsers from "./pages/AdminUsers.jsx";
 import Loading from "./components/Loading.jsx";
 import { useMapAccess } from "./lib/mapAccess.js";
 import AuthButton from "./components/AuthButton.jsx";
@@ -31,7 +32,7 @@ import NotFound from "./pages/NotFound.jsx";
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, authChecked, roleChecked, isAdmin } = useMapAccess();
+  const { currentUser, authChecked, roleChecked, isAdmin, refreshRole } = useMapAccess();
   const accessKey = JSON.stringify([currentUser?.id, isAdmin]);
   const mapList = (
     <MapList
@@ -73,7 +74,6 @@ export default function App() {
           px-4 py-3
           shadow-sm
           backdrop-blur
-          sm:flex-nowrap
           sm:gap-6
           sm:px-6
         "
@@ -114,9 +114,14 @@ export default function App() {
           新しいマップ
         </button>
         {isAdmin && (
-          <Link to="/admin/maps" className="rounded-md px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">
-            マップ管理
-          </Link>
+          <>
+            <Link to="/admin/maps" className="rounded-md px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">
+              マップ管理
+            </Link>
+            <Link to="/admin/users" className="rounded-md px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">
+              ユーザー管理
+            </Link>
+          </>
         )}
         <AuthButton />
       </header>
@@ -139,6 +144,18 @@ export default function App() {
           <Route
             path="/admin/maps"
             element={<AdminMaps key={accessKey} isAdmin={isAdmin} roleChecked={roleChecked} />}
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <AdminUsers
+                key={accessKey}
+                currentUserId={currentUser?.id}
+                isAdmin={isAdmin}
+                roleChecked={roleChecked}
+                refreshRole={refreshRole}
+              />
+            }
           />
           {/* issue #28 用のテストページ追加 */}
           <Route path="/test" element={<TestMapView />} />

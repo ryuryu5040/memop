@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabase.js";
 
 export function canManageContent(record, userId, isAdmin) {
@@ -8,9 +8,15 @@ export function canManageContent(record, userId, isAdmin) {
 export function useMapAccess() {
   const [session, setSession] = useState(undefined);
   const [role, setRole] = useState(null);
+  const [roleCheckVersion, setRoleCheckVersion] = useState(0);
   const currentUser = session?.user ?? null;
   const userId = currentUser?.id;
   const currentRole = role?.userId === userId ? role : null;
+
+  // 自分の権限を変更したときは、タブに戻るのを待たずに Supabase に確認する。
+  const refreshRole = useCallback(() => {
+    setRoleCheckVersion((version) => version + 1);
+  }, []);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -45,12 +51,13 @@ export function useMapAccess() {
       controller?.abort();
       window.removeEventListener("focus", checkRole);
     };
-  }, [userId]);
+  }, [userId, roleCheckVersion]);
 
   return {
     currentUser,
     authChecked: session !== undefined,
     roleChecked: session !== undefined && (!userId || currentRole !== null),
     isAdmin: Boolean(userId && currentRole?.isAdmin),
+    refreshRole,
   };
 }
