@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { canManageContent } from "../lib/mapAccess";
 import Loading from "../components/Loading";
 import ErrorMessage from "../components/ErrorMessage";
 import AuthButton from "../components/AuthButton";
@@ -23,7 +24,7 @@ import ThreeDotMenu, {
  * ネストできる．このページは「今いる階層の，子フォルダとマップだけ」を表示する．
  * フォルダに入っていないマップ（`folder_id` が `null`）は，トップ階層に出る．
  */
-export default function MapList() {
+export default function MapList({ currentUser, authChecked, isAdmin }) {
   const { folderId } = useParams();
   const navigate = useNavigate();
 
@@ -33,12 +34,6 @@ export default function MapList() {
   const [breadcrumb, setBreadcrumb] = useState([]);
   const [childFolders, setChildFolders] = useState([]);
   const [maps, setMaps] = useState([]);
-  // 現在ログインしているユーザー
-  const [currentUser, setCurrentUser] = useState(null);
-  // ログイン確認（supabase.auth.getUser()）が完了したかどうか．
-  // これが true になるまでは，ログイン済みか未ログインか本当のところが分からないため，
-  // トップページで「ログインしてください」を早まって出さないようにする．
-  const [authChecked, setAuthChecked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // 指定されたフォルダIDが存在しない・循環参照している場合
@@ -167,32 +162,6 @@ export default function MapList() {
     setFolderError("");
   }, [folderId]);
 
-  // 現在ログインしているユーザーを取得する
-  useEffect(() => {
-    async function loadCurrentUser() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      setCurrentUser(user);
-      setAuthChecked(true);
-    }
-
-    loadCurrentUser();
-
-    // ログイン・ログアウトされたときもcurrentUserを更新する
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUser(session?.user ?? null);
-      setAuthChecked(true);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -202,10 +171,7 @@ export default function MapList() {
       setFolderNotFound(false);
 
       try {
-        // トップページでは，ログイン確認が終わるまで判定を保留する．
-        // ここで判定してしまうと，実際はログイン済みの人にも一瞬
-        // 「ログインしてください」が表示されてしまう．
-        if (!folderId && !authChecked) {
+        if (!authChecked) {
           return;
         }
 
@@ -497,8 +463,7 @@ export default function MapList() {
 
   // マップの移動画面を開く
   function startMovingMap(map) {
-    // 画面側でも、現在のユーザーが作成者か確認する
-    if (!currentUser || currentUser.id !== map.user_id) {
+    if (!canManageContent(map, currentUser?.id, isAdmin)) {
       setMoveError("このマップは移動できません。");
       return;
     }
@@ -538,8 +503,8 @@ export default function MapList() {
         error: userError,
       } = await supabase.auth.getUser();
 
-      // 保存直前にも、ログインユーザーが作成者か確認する
-      if (userError || !user || user.id !== movingMap.user_id) {
+      const canMove = canManageContent(movingMap, user?.id, isAdmin && user?.id === currentUser?.id);
+      if (userError || !canMove) {
         setMoveError("このマップは移動できません。");
         return;
       }
@@ -548,7 +513,6 @@ export default function MapList() {
         .from("maps")
         .update({ folder_id: nextFolderId })
         .eq("id", movingMap.id)
-        .eq("user_id", user.id)
         .select("id, folder_id")
         .maybeSingle();
 
@@ -1359,7 +1323,7 @@ export default function MapList() {
                           : "🔗 URLをコピー"}
                       </MenuItem>
 
-                      {currentUser?.id === map.user_id && (
+                      {canManageContent(map, currentUser?.id, isAdmin) && (
                         <MenuItem
                           onClick={() => {
                             setOpenMenu(null);

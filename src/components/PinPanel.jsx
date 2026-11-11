@@ -40,6 +40,7 @@ function truncateToGraphemes(value, maxLength) {
 export function PinPanel({
   pin,
   currentUser,
+  canManagePin,
   saving = false,
   error = "",
   mapOptions = [],
@@ -47,7 +48,6 @@ export function PinPanel({
   onClose,
   onNavigate,
   onPreviewChange,
-  //  Update, Deleteを追加
   onUpdate,
   onDelete,
   isEditing,
@@ -55,13 +55,6 @@ export function PinPanel({
   onEditCancel,
 }) {
   const isNew = !pin?.id;
-
-  // このピンを編集・削除できるか．
-  // 持ち主なし（user_id が null）のピンは，ログイン済みなら誰でも編集・削除できる
-  // （MapDetail.jsx の canEditPin と同じ扱い．マップ・フォルダの「持ち主なし」仕様に合わせている）．
-  const isOwner = pin?.user_id === null
-    ? Boolean(currentUser)
-    : currentUser?.id === pin?.user_id;
 
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -665,7 +658,7 @@ export function PinPanel({
               </p>
             )}
             {/* 編集、削除ボタン */}
-            {isOwner && (
+            {canManagePin && (
               <div className="mt-4 flex justify-between border-t border-slate-100 pt-3">
                 <button
                   type="button"
