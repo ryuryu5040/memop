@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, staging]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-source:
+    name: PR source
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: mainへのPRは同じリポジトリのstagingからに限定する
+        shell: node {0}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_REPO: ${{ github.repository }}
+        run: |
+          const { BASE_REF, HEAD_REF, HEAD_REPO, EXPECTED_REPO } = process.env;
+          if (!['main', 'staging'].includes(BASE_REF) || !HEAD_REF || !HEAD_REPO || !EXPECTED_REPO) {
+            console.error('PRのブランチ情報を取得できませんでした。');
+            process.exitCode = 1;
+          } else if (BASE_REF === 'main' && (HEAD_REF !== 'staging' || HEAD_REPO !== EXPECTED_REPO)) {
+            console.error('mainへのPRは、このリポジトリのstagingブランチから作成してください。');
+            process.exitCode = 1;
+          } else {
+            console.log(`${HEAD_REF} → ${BASE_REF}: OK`);
+          }
+
+  quality:
+    name: Quality checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+        env:
+          # ビルド検証用。外部DBには接続しない。
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
