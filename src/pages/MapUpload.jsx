@@ -121,8 +121,12 @@ export default function MapUpload() {
   const [description, setDescription] = useState("");
   // マップの種類と，地図のマップで最初に表示する場所
   const [mapType, setMapType] = useState(MAP_TYPE_IMAGE);
-  const [tileView, setTileView] = useState({ ...DEFAULT_CENTER, zoom: DEFAULT_ZOOM });
+  const [tileView, setTileView] = useState({ ...DEFAULT_CENTER, zoom: DEFAULT_ZOOM, tileStatus: "checking" });
   const isTile = mapType === MAP_TYPE_TILE;
+  const tileReady = tileView.tileStatus === "ready" && isValidMapView(tileView);
+  const tileStatusMessage = tileView.tileStatus === "unavailable"
+    ? "選んだ場所の地図を読み込めません。地図を動かすか、拡大率を変えてください。"
+    : "地図を読み込んでいます。表示できたら作成できます。";
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -220,8 +224,8 @@ export default function MapUpload() {
       setError("マップにする画像を選んでください．");
       return;
     }
-    if (isTile && !isValidMapView(tileView)) {
-      setError("最初に表示する場所を、地図を動かして選び直してください．");
+    if (isTile && !tileReady) {
+      setError(tileStatusMessage);
       return;
     }
 
@@ -356,7 +360,7 @@ export default function MapUpload() {
   // 送信ボタンを押せてしまい，そのままアップロードされる．
   const canSubmit =
     title.trim() !== "" && !submitting
-    && (isTile ? isValidMapView(tileView) : file !== null && imageReady);
+    && (isTile ? tileReady : file !== null && imageReady);
 
   return (
     <div className="h-full overflow-auto">
@@ -383,7 +387,13 @@ export default function MapUpload() {
                   name="mapType"
                   value={option.value}
                   checked={mapType === option.value}
-                  onChange={() => { setMapType(option.value); setError(""); }}
+                  onChange={() => {
+                    setMapType(option.value);
+                    setError("");
+                    if (option.value === MAP_TYPE_TILE) {
+                      setTileView((previous) => ({ ...previous, tileStatus: "checking" }));
+                    }
+                  }}
                   disabled={submitting}
                   className="sr-only"
                 />
@@ -526,9 +536,9 @@ export default function MapUpload() {
           </button>
 
           {!submitting && !canSubmit && (
-            <p className="mt-2 text-sm text-sub">
+            <p role={isTile ? "status" : undefined} className="mt-2 text-sm text-sub">
               {isTile
-                ? "タイトルを入れると送信できます．"
+                ? tileReady ? "タイトルを入れると送信できます．" : tileStatusMessage
                 : file && !imageReady
                   ? "画像を読み込んでいます．表示できたら送信できます．"
                   : "タイトルと画像の両方を入れると送信できます．"}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createTileMap, getMapView } from "./leafletBase.js";
 import { searchAddress } from "../lib/addressSearch.js";
-import { MAX_ZOOM, MIN_ZOOM } from "../lib/tileMaps.js";
+import { isValidMapView, MAX_ZOOM, MIN_ZOOM, thumbnailTiles } from "../lib/tileMaps.js";
 import Icon from "./Icon.jsx";
 
 // 検索で場所を選んだときの拡大率（街の様子が分かるくらい）
@@ -13,7 +13,7 @@ const SEARCH_RESULT_ZOOM = 16;
  * 決め方は2つ．
  *   ・地名や住所で検索して，候補から選ぶ（国土地理院の住所検索．lib/addressSearch.js）
  *   ・地図を動かして，真ん中の 📍 を表示したい場所に合わせる
- * 地図を動かすたびに onChange({ lat, lng, zoom }) を呼ぶ．
+ * 中心と拡大率に加え，中心のタイルの読み込み状態を onChange で知らせる．
  *
  * MapUpload.jsx から lazy() で読み込む（Leaflet を必要なときだけ読み込むため）．
  */
@@ -33,15 +33,45 @@ export default function TileMapCenterPicker({ value, onChange, disabled = false 
   useEffect(() => {
     const leafletMap = createTileMap(containerRef.current, value);
     leafletMapRef.current = leafletMap;
-    // 地図を動かし終えた・拡大率を変えたときに，今の中心と拡大率を親へ知らせる
-    leafletMap.on("moveend", () => {
+    let cancelTileCheck = () => {};
+
+    function reportTileStatus(view, tileStatus) {
+      onChangeRef.current?.({ ...view, tileStatus });
+    }
+
+    function checkCenterTile() {
+      cancelTileCheck();
       const view = getMapView(leafletMap);
       setZoom(view.zoom);
-      onChangeRef.current?.(view);
+      // 表示範囲の端には地図がないこともあるので，保存する中心の1枚を確認する．
+      const tile = isValidMapView(view) ? thumbnailTiles(view, 0, 0)[0] : null;
+      if (!tile) {
+        reportTileStatus(view, "unavailable");
+        return;
+      }
+
+      reportTileStatus(view, "checking");
+      const image = new Image();
+      image.onload = () => reportTileStatus(view, image.naturalWidth > 0 ? "ready" : "unavailable");
+      image.onerror = () => reportTileStatus(view, "unavailable");
+      // 前の位置の結果が遅れて返ってきても，次の位置を保存可能にしない．
+      cancelTileCheck = () => {
+        image.onload = null;
+        image.onerror = null;
+      };
+      image.src = tile.url;
+    }
+
+    leafletMap.on("movestart", () => {
+      cancelTileCheck();
+      reportTileStatus(getMapView(leafletMap), "checking");
     });
+    leafletMap.on("moveend", checkCenterTile);
+    checkCenterTile();
     const observer = new ResizeObserver(() => leafletMap.invalidateSize());
     observer.observe(containerRef.current);
     return () => {
+      cancelTileCheck();
       observer.disconnect();
       searchControllerRef.current?.abort();
       leafletMap.remove();

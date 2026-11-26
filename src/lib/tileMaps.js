@@ -25,8 +25,9 @@ export function isTileMap(map) {
  * https://maps.gsi.go.jp/development/ichiran.html
  */
 export const TILE_URL_TEMPLATE = "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png";
+export const TILE_ATTRIBUTION_URL = "https://maps.gsi.go.jp/development/ichiran.html";
 export const TILE_ATTRIBUTION_HTML =
-  '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener noreferrer">国土地理院</a>';
+  `<a href="${TILE_ATTRIBUTION_URL}" target="_blank" rel="noopener noreferrer">国土地理院</a>`;
 // 標準地図が用意されている拡大率の範囲．DB の制約（maps.zoom）も同じ範囲にしている．
 export const MIN_ZOOM = 5;
 export const MAX_ZOOM = 18;

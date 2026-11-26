@@ -6,7 +6,7 @@ import { supabase } from "../lib/supabase";
 import { canManageContent } from "../lib/mapAccess";
 import { getMapShareUrl } from "../lib/mapShareLinks";
 import { useMapImage } from "../lib/mapImages";
-import { getMapInitialView, isTileMap, thumbnailTiles } from "../lib/tileMaps.js";
+import { getMapInitialView, isTileMap, thumbnailTiles, TILE_ATTRIBUTION_URL } from "../lib/tileMaps.js";
 import Loading from "../components/Loading";
 import ErrorMessage from "../components/ErrorMessage";
 import AuthButton from "../components/AuthButton";
@@ -23,6 +23,9 @@ import SaveToMyListButton from "../components/SaveToMyListButton";
 import ThreeDotMenu, {
   MenuItem,
 } from "../components/ThreeDotMenu";
+
+// サムネイルの角丸は、カードの1pxの枠に合わせて内側を丸める。
+const MAP_THUMBNAIL_CLASS = "w-24 shrink-0 overflow-hidden rounded-tl-[calc(var(--radius-xl)-1px)] rounded-bl-[calc(var(--radius-xl)-1px)] bg-paper sm:w-full sm:rounded-bl-none sm:rounded-tr-[calc(var(--radius-xl)-1px)]";
 
 function MapThumbnail({ map }) {
   const { src, loading, imageContainer } = useMapImage(map.image_url, true);
@@ -62,7 +65,7 @@ function TileMapThumbnail({ map }) {
   const tiles = thumbnailTiles(getMapInitialView(map));
 
   return (
-    <div className="relative h-full min-h-20 overflow-hidden rounded-[inherit] bg-paper sm:h-36">
+    <div className={`${MAP_THUMBNAIL_CLASS} relative min-h-20 sm:h-36`}>
       {/* 枠の中心を基準に，タイルを並べる．枠の大きさが変わっても中心の位置は真ん中のまま */}
       <div className="absolute left-1/2 top-1/2">
         {tiles.map((tile) => (
@@ -83,9 +86,16 @@ function TileMapThumbnail({ map }) {
         <Icon name="map" className="size-3" />
         地図
       </span>
-      <span className="absolute bottom-0 right-0 rounded-tl bg-surface/80 px-1 text-[9px] leading-tight text-sub">
+      {/* カード全体を覆うマップのリンクより、出典リンクを手前に置く。 */}
+      <a
+        href={TILE_ATTRIBUTION_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="国土地理院の地理院タイル一覧（新しいタブ）"
+        className="absolute bottom-0 right-0 z-10 inline-flex min-h-6 items-center rounded-tl bg-surface/95 px-1.5 text-[10px] leading-tight text-sub underline hover:text-ink focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      >
         国土地理院
-      </span>
+      </a>
     </div>
   );
 }
@@ -1394,27 +1404,25 @@ export default function MapList({ currentUser, authChecked, isAdmin, publicOnly 
                   // フォルダのカードと同じく，白い枠のどこを押してもマップを開く（タイトルのリンクを枠いっぱいに広げている）
                   className={`group relative flex rounded-xl border border-line bg-surface transition-colors hover:bg-paper sm:flex-col ${openMenu === `map-${map.id}` ? "z-30" : "z-0"}`}
                 >
-                  <Link
-                    to={`/maps/${map.id}`}
-                    tabIndex={-1}
-                    aria-hidden="true"
-                    // 角丸はカードの枠（1px）の内側に合わせて，カードの角丸より1px小さくする（同じ値だと角に隙間が見える）．
-                    // 角は1つずつ指定する（スマホは左上・左下，広い画面は左上・右上）．rounded-l と rounded-t のように
-                    // 2つの角をまとめて指定すると，両方に含まれる左上を後から書かれた方が上書きし，左上だけ角丸が消えてしまう．
-                    // isolate：画像のフェードなどで画像が別の描画層になっても，角丸の外側をきちんと切り取らせるため．
-                    // 中のサムネイル（画像・読み込み中の面）も rounded-[inherit] で同じ角丸を受け継ぐ．
-                    className="isolate block w-24 shrink-0 overflow-hidden rounded-tl-[calc(var(--radius-xl)-1px)] rounded-bl-[calc(var(--radius-xl)-1px)] bg-paper sm:w-full sm:rounded-bl-none sm:rounded-tr-[calc(var(--radius-xl)-1px)]"
-                  >
-                    {isTileMap(map) ? (
-                      <TileMapThumbnail map={map} />
-                    ) : map.image_url ? (
-                      <MapThumbnail map={map} />
-                    ) : (
-                      <div className="grid h-full min-h-20 place-items-center text-faint sm:h-36">
-                        <Icon name="map" className="size-6" />
-                      </div>
-                    )}
-                  </Link>
+                  {isTileMap(map) ? (
+                    <TileMapThumbnail map={map} />
+                  ) : (
+                    <Link
+                      to={`/maps/${map.id}`}
+                      tabIndex={-1}
+                      aria-hidden="true"
+                      // 画像がフェードしている間も、サムネイルの角丸からはみ出さないようにする。
+                      className={`${MAP_THUMBNAIL_CLASS} isolate block`}
+                    >
+                      {map.image_url ? (
+                        <MapThumbnail map={map} />
+                      ) : (
+                        <div className="grid h-full min-h-20 place-items-center text-faint sm:h-36">
+                          <Icon name="map" className="size-6" />
+                        </div>
+                      )}
+                    </Link>
+                  )}
 
                   {/*
                     カードの本文は2段．
