@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "node --test tests/*.test.js",
-    "test:preview": "node tests/preview.mjs"
+    "test:preview": "node tests/preview.mjs",
+    "test:preview:lan": "node tests/preview.mjs --lan"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

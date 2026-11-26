@@ -1,5 +1,6 @@
 // npm run test:preview。架空データだけでUIを確認するローカル専用サーバー。
 import http from "node:http";
+import os from "node:os";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { createServer } from "vite";
@@ -64,8 +65,17 @@ for (const [title,lat,lng,pinType,category,subcategory] of [
 // ポートは環境変数で変えられる（すでに別の確認用サーバーが動いているときに使う）．
 const uiPort=Number(process.env.PREVIEW_UI_PORT??4179);
 const apiPort=Number(process.env.PREVIEW_API_PORT??55439);
-const uiOrigin=`http://127.0.0.1:${uiPort}`;
-const apiOrigin=`http://127.0.0.1:${apiPort}`;
+// --lan を付けて起動したときは，同じ Wi-Fi のスマホからも開けるようにする（npm run test:preview:lan）．
+// 待ち受けをすべての接続先（0.0.0.0）にし，画面に出す URL はこのパソコンの LAN 内のアドレスにする．
+// 架空データだけを使うので，見られても困るものは無いが，同じネットワークの人なら誰でも開ける．
+const lan=process.argv.includes("--lan");
+const lanAddress=Object.values(os.networkInterfaces()).flat()
+  .find((address)=>address?.family==="IPv4"&&!address.internal)?.address;
+if(lan&&!lanAddress)throw Error("LAN のアドレスが見つかりません。Wi-Fi につながっているか確認してください。");
+const bindHost=lan?"0.0.0.0":"127.0.0.1";
+const publicHost=lan?lanAddress:"127.0.0.1";
+const uiOrigin=`http://${publicHost}:${uiPort}`;
+const apiOrigin=`http://${publicHost}:${apiPort}`;
 function jwt(userId) {
   const enc=(x)=>Buffer.from(JSON.stringify(x)).toString("base64url");
   return `${enc({alg:"HS256",typ:"JWT"})}.${enc({sub:userId,aud:"authenticated",role:"authenticated",exp:Math.floor(Date.now()/1000)+3600})}.local-test-signature`;
@@ -156,11 +166,11 @@ const api=http.createServer(async (req,res)=>{
     res.writeHead(400,{"Content-Type":"application/json"});res.end(JSON.stringify({code:error.code??"test_api",message:error.message}));
   }
 });
-api.listen(apiPort,"127.0.0.1");
+api.listen(apiPort,bindHost);
 process.env.VITE_SUPABASE_URL=apiOrigin;
 process.env.VITE_SUPABASE_PUBLISHABLE_KEY="sb_publishable_local_fixture";
-const vite=await createServer({server:{host:"127.0.0.1",port:uiPort,strictPort:true}});
+const vite=await createServer({server:{host:bindHost,port:uiPort,strictPort:true}});
 await vite.listen();
-console.log(`動作確認UI: ${uiOrigin}\n架空のユーザー・共有リンク: ${apiOrigin}`);
+console.log(`動作確認UI: ${uiOrigin}\n架空のユーザー・共有リンク（最初にここを開く）: ${apiOrigin}`);
 async function close(){await vite.close();await new Promise(resolve=>api.close(resolve));await db.close();process.exit();}
 process.on("SIGINT",close);process.on("SIGTERM",close);
