@@ -27,11 +27,27 @@ await db.query("insert into auth.users(id) values ($1),($2)",[owner,viewer]);
 await db.exec(await load("../docs/sql/20261124082657_map_share_scope_prepare.sql"));
 await db.exec("update private.map_share_settings set enforced=true");
 await db.exec(await load("../supabase/migrations/20261124085317_public_map_visibility.sql"));
+await db.exec(await load("../supabase/migrations/20261126000000_pin_categories.sql"));
+// 画面からピンの編集を試せるよう，作成者は自分のピンを更新できるようにする（本番と同じ考え方）．
+await db.exec(`
+  create policy pins_update on public.pins for update to authenticated
+    using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+`);
 const image="data:image/svg+xml,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600"><rect width="900" height="600" fill="#e4f0e9"/><path d="M0 300H900M450 0V600" stroke="white" stroke-width="50"/><text x="40" y="70" font-size="32" fill="#486958">動作確認用マップ</text></svg>');
 for (const [id,userId,title,visibility] of [[mapA,owner,"豊洲ランチ","public"],[mapB,owner,"カフェめぐり","public"],[ownMap,viewer,"自分のマップ","private"],[unlisted,owner,"URL限定マップ","unlisted"]]) {
   await db.query("insert into public.maps(id,user_id,title,description,image_url,visibility) values ($1,$2,$3,'ローカルの架空データです',$4,$5)",[id,userId,title,image,visibility]);
 }
 await db.query("insert into public.pins(map_id,user_id,title,kind,link_map_id) values ($1,$2,'カフェへ移動','button',$3)",[mapA,owner,mapB]);
+// カテゴリの絞り込みを試せるよう，カテゴリ付き・なしのピンを置く．
+for (const [title,x,y,pinType,category,subcategory] of [
+  ["駅前のラーメン屋",.2,.3,"recommend","food","ramen"],
+  ["角のカフェ",.35,.65,"default","food","cafe"],
+  ["中央公園",.7,.25,"photo","nature","park"],
+  ["コンビニ",.8,.7,"default","shopping",null],
+  ["カテゴリなしのメモ",.55,.5,"caution",null,null],
+]) {
+  await db.query("insert into public.pins(map_id,user_id,title,x,y,pin_type,category,subcategory) values ($1,$2,$3,$4,$5,$6,$7,$8)",[mapA,owner,title,x,y,pinType,category,subcategory]);
+}
 
 const uiOrigin="http://127.0.0.1:4179";
 function jwt(userId) {
