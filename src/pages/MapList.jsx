@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { canManageContent } from "../lib/mapAccess";
 import { getMapShareUrl } from "../lib/mapShareLinks";
 import { useMapImage } from "../lib/mapImages";
+import { getMapInitialView, isTileMap, thumbnailTiles } from "../lib/tileMaps.js";
 import Loading from "../components/Loading";
 import ErrorMessage from "../components/ErrorMessage";
 import AuthButton from "../components/AuthButton";
@@ -49,6 +50,42 @@ function MapThumbnail({ map }) {
           画像を表示できません
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 地図のマップのサムネイル．最初に表示する場所のまわりの地図画像（タイル）を並べて見せる．
+ * Leaflet は使わない（一覧を重くしないため）．位置の計算は lib/tileMaps.js の thumbnailTiles．
+ */
+function TileMapThumbnail({ map }) {
+  const tiles = thumbnailTiles(getMapInitialView(map));
+
+  return (
+    <div className="relative h-full min-h-20 overflow-hidden rounded-[inherit] bg-paper sm:h-36">
+      {/* 枠の中心を基準に，タイルを並べる．枠の大きさが変わっても中心の位置は真ん中のまま */}
+      <div className="absolute left-1/2 top-1/2">
+        {tiles.map((tile) => (
+          <img
+            key={tile.key}
+            src={tile.url}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+            className="absolute size-64 max-w-none"
+            style={{ left: tile.left, top: tile.top }}
+          />
+        ))}
+      </div>
+      {/* 地図のマップだと分かる目印と，地図の提供元の表記 */}
+      <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded bg-surface/90 px-1.5 py-0.5 text-[10px] font-bold text-ink shadow-sm">
+        <Icon name="map" className="size-3" />
+        地図
+      </span>
+      <span className="absolute bottom-0 right-0 rounded-tl bg-surface/80 px-1 text-[9px] leading-tight text-sub">
+        国土地理院
+      </span>
     </div>
   );
 }
@@ -1368,7 +1405,9 @@ export default function MapList({ currentUser, authChecked, isAdmin, publicOnly 
                     // 中のサムネイル（画像・読み込み中の面）も rounded-[inherit] で同じ角丸を受け継ぐ．
                     className="isolate block w-24 shrink-0 overflow-hidden rounded-tl-[calc(var(--radius-xl)-1px)] rounded-bl-[calc(var(--radius-xl)-1px)] bg-paper sm:w-full sm:rounded-bl-none sm:rounded-tr-[calc(var(--radius-xl)-1px)]"
                   >
-                    {map.image_url ? (
+                    {isTileMap(map) ? (
+                      <TileMapThumbnail map={map} />
+                    ) : map.image_url ? (
                       <MapThumbnail map={map} />
                     ) : (
                       <div className="grid h-full min-h-20 place-items-center text-faint sm:h-36">

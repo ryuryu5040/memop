@@ -33,7 +33,24 @@ for (const [id,userId,title,visibility] of [[mapA,owner,"豊洲ランチ","publi
 }
 await db.query("insert into public.pins(map_id,user_id,title,kind,link_map_id) values ($1,$2,'カフェへ移動','button',$3)",[mapA,owner,mapB]);
 
-const uiOrigin="http://127.0.0.1:4179";
+// 地図のマップ（国土地理院の地図）．地図の画像はインターネットから読み込む．
+await db.exec(await load("../supabase/migrations/20261127000000_tile_maps.sql"));
+const tileMap = "10000000-0000-4000-8000-000000000005";
+await db.query("insert into public.maps(id,user_id,title,description,visibility,map_type,center_lat,center_lng,zoom) values ($1,$2,'豊洲さんぽ（地図）','ローカルの架空データです','public','tile',35.6547,139.7959,16)",[tileMap,owner]);
+for (const [title,lat,lng,pinType] of [["豊洲駅",35.6549,139.7963,"default"],["ぐるり公園",35.6493,139.7887,"photo"],["ここは工事中",35.6588,139.7925,"caution"]]) {
+  await db.query("insert into public.pins(map_id,user_id,title,x,y,lat,lng,pin_type) values ($1,$2,$3,null,null,$4,$5,$6)",[tileMap,owner,title,lat,lng,pinType]);
+}
+// 画面からピンの編集を試せるよう，作成者は自分のピンを更新できるようにする（本番と同じ考え方）．
+await db.exec(`
+  create policy pins_update on public.pins for update to authenticated
+    using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+`);
+
+// ポートは環境変数で変えられる（すでに別の確認用サーバーが動いているときに使う）．
+const uiPort=Number(process.env.PREVIEW_UI_PORT??4179);
+const apiPort=Number(process.env.PREVIEW_API_PORT??55439);
+const uiOrigin=`http://127.0.0.1:${uiPort}`;
+const apiOrigin=`http://127.0.0.1:${apiPort}`;
 function jwt(userId) {
   const enc=(x)=>Buffer.from(JSON.stringify(x)).toString("base64url");
   return `${enc({alg:"HS256",typ:"JWT"})}.${enc({sub:userId,aud:"authenticated",role:"authenticated",exp:Math.floor(Date.now()/1000)+3600})}.local-test-signature`;
@@ -51,7 +68,7 @@ const api=http.createServer(async (req,res)=>{
   res.setHeader("Access-Control-Allow-Headers","*");
   res.setHeader("Access-Control-Allow-Methods","GET,POST,PATCH,DELETE,OPTIONS");
   if(req.method==="OPTIONS") {res.writeHead(204);res.end();return;}
-  const url=new URL(req.url,"http://127.0.0.1:55439");
+  const url=new URL(req.url,apiOrigin);
   if(url.pathname.startsWith("/login/")||url.pathname==="/auth/v1/authorize") {
     const id=url.pathname.endsWith("owner")?owner:viewer;
     res.writeHead(302,{Location:`${uiOrigin}/#access_token=${jwt(id)}&refresh_token=fixture&expires_in=3600&token_type=bearer`});res.end();return;
@@ -124,11 +141,11 @@ const api=http.createServer(async (req,res)=>{
     res.writeHead(400,{"Content-Type":"application/json"});res.end(JSON.stringify({code:error.code??"test_api",message:error.message}));
   }
 });
-api.listen(55439,"127.0.0.1");
-process.env.VITE_SUPABASE_URL="http://127.0.0.1:55439";
+api.listen(apiPort,"127.0.0.1");
+process.env.VITE_SUPABASE_URL=apiOrigin;
 process.env.VITE_SUPABASE_PUBLISHABLE_KEY="sb_publishable_local_fixture";
-const vite=await createServer({server:{host:"127.0.0.1",port:4179,strictPort:true}});
+const vite=await createServer({server:{host:"127.0.0.1",port:uiPort,strictPort:true}});
 await vite.listen();
-console.log(`動作確認UI: ${uiOrigin}\n架空のユーザー・共有リンク: http://127.0.0.1:55439`);
+console.log(`動作確認UI: ${uiOrigin}\n架空のユーザー・共有リンク: ${apiOrigin}`);
 async function close(){await vite.close();await new Promise(resolve=>api.close(resolve));await db.close();process.exit();}
 process.on("SIGINT",close);process.on("SIGTERM",close);
