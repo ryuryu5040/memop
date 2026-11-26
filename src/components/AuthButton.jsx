@@ -4,6 +4,11 @@ import { getGithubUsername } from "../lib/displayName.js";
 import Icon from "./Icon.jsx";
 import { showToast } from "../lib/toast.js";
 
+// メールアドレスでのログイン（ログイン用リンクの送信）を表示するかどうか．
+// Supabase 標準のメール送信は上限が厳しく，チームメンバーにしか届かないため，
+// Resend との連携が済むまで一時的に隠す（#32）．再開するときは true にする．
+const SHOW_EMAIL_LOGIN = false;
+
 export default function AuthButton({ centered = false }) {
   // ログインに使うメールアドレスを保持する
   const [email, setEmail] = useState("");
@@ -68,7 +73,8 @@ export default function AuthButton({ centered = false }) {
 
   // 入力されたメールアドレスにログイン用リンクを送信する
   async function handleLogin() {
-    if (submitting) return;
+    // メールでのログインを止めている間は，何かの拍子に呼ばれても送信しない．
+    if (!SHOW_EMAIL_LOGIN || submitting) return;
     setSubmitting(true);
     setNotice(null);
 
@@ -244,36 +250,44 @@ export default function AuthButton({ centered = false }) {
         Googleでログイン
       </button>
 
-      <div className="flex items-center gap-3 py-1 text-xs text-faint">
-        <span className="h-px flex-1 bg-line" />
-        <span>または</span>
-        <span className="h-px flex-1 bg-line" />
-      </div>
+      {SHOW_EMAIL_LOGIN ? (
+        <>
+          <div className="flex items-center gap-3 py-1 text-xs text-faint">
+            <span className="h-px flex-1 bg-line" />
+            <span>または</span>
+            <span className="h-px flex-1 bg-line" />
+          </div>
 
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          handleLogin();
-        }}
-        className="space-y-2"
-      >
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="メールアドレス"
-          aria-label="メールアドレス"
-          autoComplete="email"
-          className="field"
-        />
-        <button
-          type="submit"
-          disabled={submitting || email.trim() === ""}
-          className="btn w-full"
-        >
-          ログイン用のメールを送る
-        </button>
-      </form>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleLogin();
+            }}
+            className="space-y-2"
+          >
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="メールアドレス"
+              aria-label="メールアドレス"
+              autoComplete="email"
+              className="field"
+            />
+            <button
+              type="submit"
+              disabled={submitting || email.trim() === ""}
+              className="btn w-full"
+            >
+              ログイン用のメールを送る
+            </button>
+          </form>
+        </>
+      ) : (
+        <p className="text-xs leading-relaxed text-sub">
+          メールアドレスでのログインは一時停止しています。GitHub または Google でログインしてください。
+        </p>
+      )}
 
       {notice && (
         <p
