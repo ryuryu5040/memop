@@ -1,5 +1,6 @@
 // npm run test:preview。架空データだけでUIを確認するローカル専用サーバー。
 import http from "node:http";
+import os from "node:os";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { createServer } from "vite";
@@ -49,7 +50,32 @@ for (const [title,x,y,pinType,category,subcategory] of [
   await db.query("insert into public.pins(map_id,user_id,title,x,y,pin_type,category,subcategory) values ($1,$2,$3,$4,$5,$6,$7,$8)",[mapA,owner,title,x,y,pinType,category,subcategory]);
 }
 
-const uiOrigin="http://127.0.0.1:4179";
+// 地図のマップ（国土地理院の地図）．地図の画像はインターネットから読み込む．
+await db.exec(await load("../supabase/migrations/20261127000000_tile_maps.sql"));
+const tileMap = "10000000-0000-4000-8000-000000000005";
+await db.query("insert into public.maps(id,user_id,title,description,visibility,map_type,center_lat,center_lng,zoom) values ($1,$2,'豊洲さんぽ（地図）','ローカルの架空データです','public','tile',35.6547,139.7959,16)",[tileMap,owner]);
+for (const [title,lat,lng,pinType,category,subcategory] of [
+  ["豊洲駅",35.6549,139.7963,"default","transport","station_bus_stop"],
+  ["ぐるり公園",35.6493,139.7887,"photo","nature","park"],
+  ["ここは工事中",35.6588,139.7925,"caution",null,null],
+]) {
+  await db.query("insert into public.pins(map_id,user_id,title,x,y,lat,lng,pin_type,category,subcategory) values ($1,$2,$3,null,null,$4,$5,$6,$7,$8)",[tileMap,owner,title,lat,lng,pinType,category,subcategory]);
+}
+
+// ポートは環境変数で変えられる（すでに別の確認用サーバーが動いているときに使う）．
+const uiPort=Number(process.env.PREVIEW_UI_PORT??4179);
+const apiPort=Number(process.env.PREVIEW_API_PORT??55439);
+// --lan を付けて起動したときは，同じ Wi-Fi のスマホからも開けるようにする（npm run test:preview:lan）．
+// 待ち受けをすべての接続先（0.0.0.0）にし，画面に出す URL はこのパソコンの LAN 内のアドレスにする．
+// 架空データだけを使うので，見られても困るものは無いが，同じネットワークの人なら誰でも開ける．
+const lan=process.argv.includes("--lan");
+const lanAddress=Object.values(os.networkInterfaces()).flat()
+  .find((address)=>address?.family==="IPv4"&&!address.internal)?.address;
+if(lan&&!lanAddress)throw Error("LAN のアドレスが見つかりません。Wi-Fi につながっているか確認してください。");
+const bindHost=lan?"0.0.0.0":"127.0.0.1";
+const publicHost=lan?lanAddress:"127.0.0.1";
+const uiOrigin=`http://${publicHost}:${uiPort}`;
+const apiOrigin=`http://${publicHost}:${apiPort}`;
 function jwt(userId) {
   const enc=(x)=>Buffer.from(JSON.stringify(x)).toString("base64url");
   return `${enc({alg:"HS256",typ:"JWT"})}.${enc({sub:userId,aud:"authenticated",role:"authenticated",exp:Math.floor(Date.now()/1000)+3600})}.local-test-signature`;
@@ -67,7 +93,7 @@ const api=http.createServer(async (req,res)=>{
   res.setHeader("Access-Control-Allow-Headers","*");
   res.setHeader("Access-Control-Allow-Methods","GET,POST,PATCH,DELETE,OPTIONS");
   if(req.method==="OPTIONS") {res.writeHead(204);res.end();return;}
-  const url=new URL(req.url,"http://127.0.0.1:55439");
+  const url=new URL(req.url,apiOrigin);
   if(url.pathname.startsWith("/login/")||url.pathname==="/auth/v1/authorize") {
     const id=url.pathname.endsWith("owner")?owner:viewer;
     res.writeHead(302,{Location:`${uiOrigin}/#access_token=${jwt(id)}&refresh_token=fixture&expires_in=3600&token_type=bearer`});res.end();return;
@@ -140,11 +166,11 @@ const api=http.createServer(async (req,res)=>{
     res.writeHead(400,{"Content-Type":"application/json"});res.end(JSON.stringify({code:error.code??"test_api",message:error.message}));
   }
 });
-api.listen(55439,"127.0.0.1");
-process.env.VITE_SUPABASE_URL="http://127.0.0.1:55439";
+api.listen(apiPort,bindHost);
+process.env.VITE_SUPABASE_URL=apiOrigin;
 process.env.VITE_SUPABASE_PUBLISHABLE_KEY="sb_publishable_local_fixture";
-const vite=await createServer({server:{host:"127.0.0.1",port:4179,strictPort:true}});
+const vite=await createServer({server:{host:bindHost,port:uiPort,strictPort:true}});
 await vite.listen();
-console.log(`動作確認UI: ${uiOrigin}\n架空のユーザー・共有リンク: http://127.0.0.1:55439`);
+console.log(`動作確認UI: ${uiOrigin}\n架空のユーザー・共有リンク（最初にここを開く）: ${apiOrigin}`);
 async function close(){await vite.close();await new Promise(resolve=>api.close(resolve));await db.close();process.exit();}
 process.on("SIGINT",close);process.on("SIGTERM",close);

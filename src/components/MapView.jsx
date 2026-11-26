@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
-import { getPinEmoji } from "../lib/pinTypes";
-import { getPinCategory } from "../lib/pinCategories";
 import { useMapImage } from "../lib/mapImages";
-import { EmojiPin } from "./EmojiPin"
+import { PendingPinMarker, PinMarker } from "./PinMarker.jsx";
 import Icon from "./Icon.jsx";
 import { scrollBehavior } from "../lib/motion.js";
 
@@ -668,33 +666,7 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
                 }`}
               title={pin.title}
             >
-              {pin.kind === "button" ? (
-                // ボタンは，押すと別のマップへ移動することが一目で分かるよう，
-                // 普通のピン（絵文字がそのまま浮くだけ）とは見た目を変える．
-                // 実際の建物の案内サインに寄せて，扉の絵文字＋行き先の名前を出す．
-                <span className="flex flex-col items-center">
-                  <span className={`flex h-9 w-9 items-center justify-center rounded-full bg-ink text-lg text-white shadow-md ${isSelected
-                    ? "ring-4 ring-accent ring-offset-2 ring-offset-white"
-                    : "ring-2 ring-white"
-                    }`}>
-                    🚪
-                  </span>
-                  <span className={`mt-0.5 max-w-24 truncate rounded bg-ink px-1.5 py-0.5 text-xs font-bold text-white shadow ${isSelected
-                    ? "ring-2 ring-accent"
-                    : ""
-                    }`}>
-                    {pin.title}
-                  </span>
-                </span>
-              ) : (
-                <EmojiPin
-                  emoji={getPinEmoji(pin.pin_type)}
-                  badge={getPinCategory(pin.category)?.emoji}
-                  selected={isSelected}
-                  size="sm"
-                />
-
-              )}
+              <PinMarker pin={pin} selected={isSelected} />
             </button>
             );
           })}
@@ -709,18 +681,7 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
               }}
               className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full animate-pulse motion-reduce:animate-none"
             >
-              {pendingPin.kind === "button" ? (
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-lg text-white shadow-md ring-2 ring-white">
-                  🚪
-                </span>
-              ) : (
-                <EmojiPin
-                  emoji={getPinEmoji(pendingPin.pin_type)}
-                  badge={getPinCategory(pendingPin.category)?.emoji}
-                  preview
-                  size="sm"
-                />
-              )}
+              <PendingPinMarker pin={pendingPin} />
             </div>
           )}
         </div>

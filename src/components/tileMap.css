@@ -1,0 +1,41 @@
+/*
+ * 地図のマップ（Leaflet）用の見た目の調整．leafletBase.js から読み込むので，地図のマップを開いたときだけ効く．
+ */
+
+/* 地図の背景を，画像のマップの余白と同じ色にする */
+.memop-tile-map.leaflet-container {
+  background: var(--color-paper);
+  font: inherit;
+}
+
+/* ピンを追加できるときは，画像のマップと同じく十字のカーソルにする（地図を動かしている間はつかむ手） */
+.memop-tile-map.memop-can-add-pin.leaflet-grab {
+  cursor: crosshair;
+}
+.memop-tile-map.leaflet-dragging .leaflet-grab {
+  cursor: grabbing;
+}
+
+/*
+ * ピンの入れ物．Leaflet はこの箱の左上を緯度経度の位置に置くので，箱の大きさは 0 にして，
+ * 中身（ピンの絵）を「下の真ん中が位置に来る」ようにずらして描く（TileMapView.jsx）．
+ */
+.memop-tile-pin {
+  width: 0 !important;
+  height: 0 !important;
+  overflow: visible;
+}
+.memop-tile-pin:focus-visible {
+  outline: none;
+}
+.memop-tile-pin:focus-visible .memop-tile-pin-body {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+
+/* 地図の提供元の表記．小さくても読めるよう，背景を少し濃くする */
+.memop-tile-map .leaflet-control-attribution {
+  background: rgb(255 255 255 / 0.85);
+  font-size: 11px;
+}

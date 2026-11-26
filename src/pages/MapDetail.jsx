@@ -1,7 +1,8 @@
 import MapVisibilitySelect from "../components/MapVisibilitySelect.jsx";
 import { getMapVisibility, getMapVisibilityLabel, mapVisibilityValues } from "../lib/mapVisibility.js";
 import { subscribeSavedMapsChanged } from "../lib/savedMaps.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { isSamePinPosition, isTileMap, pinPositionValues } from "../lib/tileMaps.js";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { canManageContent } from "../lib/mapAccess";
@@ -36,6 +37,9 @@ import AuthButton from "../components/AuthButton.jsx";
 import { showToast } from "../lib/toast.js";
 
 const MAP_BUTTON_FILTER = "kind:button";
+
+// 地図のマップの表示部品．Leaflet を含むので，地図のマップを開いたときだけ読み込む
+const TileMapView = lazy(() => import("../components/TileMapView.jsx"));
 
 /** ピンの保存・更新に失敗したときの文言．SQL 未適用で列が無いときは，空欄にすれば保存できると案内する */
 function pinSaveErrorMessage(error, action) {
@@ -189,22 +193,20 @@ export default function MapDetail({ currentUser, isAdmin }) {
   useEffect(() => {
     isEditingPinRef.current = isEditingPin;
   }, [isEditingPin]);
-  function handleMovePin(x, y) {
+  // position は，画像のマップなら { x, y }，地図のマップなら { lat, lng }（lib/tileMaps.js）
+  function handleMovePin(position) {
     if (!isEditingPin) return;
 
     setSelectedPin((pin) => {
       if (!pin) return pin;
 
+      const moved = { ...pin, ...position };
       // 座標が変わっていなければ再レンダーしない
-      if (pin.x === x && pin.y === y) {
+      if (isSamePinPosition(pin, moved)) {
         return pin;
       }
 
-      return {
-        ...pin,
-        x,
-        y,
-      };
+      return moved;
     });
   }
 
@@ -690,8 +692,11 @@ export default function MapDetail({ currentUser, isAdmin }) {
     };
   }, [id, currentUserId]);
 
-  /** 画像の何もない場所がクリックされた．そこに新しいピンを作る準備をする */
-  async function handleMapClick(x, y) {
+  /**
+   * 地図の何もない場所がクリックされた．そこに新しいピンを作る準備をする．
+   * position は，画像のマップなら { x, y }，地図のマップなら { lat, lng }．
+   */
+  async function handleMapClick(position) {
     setPinError("");
 
     // 現在ログインしているユーザーを確認する
@@ -705,7 +710,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
       showToast("ピンを追加するにはログインしてください。", { tone: "error" });
       return;
     }
-    setSelectedPin({ x, y });
+    setSelectedPin({ ...position });
   }
 
   /** ピンをクリックしたら詳細パネルを開く */
@@ -929,8 +934,8 @@ export default function MapDetail({ currentUser, isAdmin }) {
         .from("pins")
         .insert({
           map_id: id,
-          x: selectedPin.x,
-          y: selectedPin.y,
+          // 画像のマップは { x, y }，地図のマップは { lat, lng } だけを送る（lib/tileMaps.js）
+          ...pinPositionValues(map, selectedPin),
           title,
           content,
           pin_type: pinType,
@@ -996,8 +1001,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
       const { data: updated, error: updateError } = await supabase
         .from("pins")
         .update({
-          x: selectedPin.x,
-          y: selectedPin.y,
+          ...pinPositionValues(map, selectedPin),
           title,
           content,
           pin_type: pinType,
@@ -1646,6 +1650,29 @@ export default function MapDetail({ currentUser, isAdmin }) {
           )}
           {/* 地図は残りの高さをすべて使う．スマホで下に絞り込みが並ぶと，その分だけ縮む． */}
           <div className="relative min-h-0 min-w-0 flex-1">
+            {isTileMap(map) ? (
+              // 地図のマップ．Leaflet は開いたときにだけ読み込む（読み込み中は「読み込み中」を出す）
+              <Suspense fallback={<Loading />}>
+                <TileMapView
+                  // マップを切り替えたときに表示位置をそのマップの最初の位置に戻すため，作り直す．
+                  key={map.id}
+                  map={map}
+                  pins={displayPins}
+                  pendingPin={
+                    selectedPin && !selectedPin.id
+                      ? { ...selectedPin, ...pendingPinAppearance }
+                      : null
+                  }
+                  selectedPinId={selectedPin?.id ?? null}
+                  onPinClick={handlePinClick}
+                  onPinDoubleClick={handlePinDoubleClick}
+                  onMapClick={isEditingPin || !currentUser ? undefined : handleMapClick}
+                  movablePinId={isEditingPin ? selectedPin?.id : null}
+                  onPinMove={handleMovePin}
+                  dense={Boolean(selectedPin)}
+                />
+              </Suspense>
+            ) : (
             <MapView
               // マップを切り替えたときにズーム倍率(scale)をリセットするため，
               // マップごとに別インスタンスとして作り直す．
@@ -1663,11 +1690,13 @@ export default function MapDetail({ currentUser, isAdmin }) {
               onPinDoubleClick={handlePinDoubleClick}
               // 未ログインではピンを作れないので，地図を押しても何も起こさない．
               // （スクロールしようとして触れるたびに「ログインしてください」と出るのを防ぐ）
-              onMapClick={isEditingPin || !currentUser ? undefined : handleMapClick}
+              // 画像のマップは位置を (x, y) の2つで渡してくるので，{ x, y } にまとめる．
+              onMapClick={isEditingPin || !currentUser ? undefined : (x, y) => handleMapClick({ x, y })}
               movablePinId={isEditingPin ? selectedPin?.id : null}
-              onPinMove={handleMovePin}
+              onPinMove={(x, y) => handleMovePin({ x, y })}
               dense={Boolean(selectedPin)}
             />
+            )}
           </div>
         </div>
 

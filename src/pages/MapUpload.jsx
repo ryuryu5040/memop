@@ -2,19 +2,41 @@ import MapVisibilitySelect from "../components/MapVisibilitySelect.jsx";
 import Icon from "../components/Icon.jsx";
 import { mapVisibilityValues } from "../lib/mapVisibility.js";
 import { getMapCreationErrorMessage, isMapVisibilityMissing, MAP_VISIBILITY_NOT_READY_MESSAGE } from "../lib/mapCreationErrors.js";
-import { useEffect, useRef, useState } from "react";
+import {
+  DEFAULT_CENTER,
+  DEFAULT_ZOOM,
+  MAP_TYPE_IMAGE,
+  MAP_TYPE_TILE,
+  TILE_MAP_UNAVAILABLE_MESSAGE,
+  isTileMapColumnMissingError,
+  isValidMapView,
+} from "../lib/tileMaps.js";
+import Loading from "../components/Loading";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { MAP_IMAGE_BUCKET } from "../lib/mapImages";
 import { compressImage } from "../lib/imageCompression.js";
 import ErrorMessage from "../components/ErrorMessage";
 
+// 地図の部品（Leaflet）は「地図」を選んだときだけ読み込む
+const TileMapCenterPicker = lazy(() => import("../components/TileMapCenterPicker.jsx"));
+
+const MAP_TYPE_OPTIONS = [
+  { value: MAP_TYPE_IMAGE, label: "画像", icon: "image", description: "イラストマップや館内図など、好きな画像をそのまま地図にします。" },
+  { value: MAP_TYPE_TILE, label: "地図", icon: "map", description: "国土地理院の地図を使います。拡大しても粗くならず、自由に動かせます。" },
+];
+
 /**
  * マップ新規作成ページ．
  *
  * URL: /maps/new （フォルダの中で作るときは /maps/new?folder=フォルダのid）
  *
- * 流れは3段階．
+ * マップの種類は2つ（lib/tileMaps.js）．
+ *   画像 … 下の3段階で画像を保存してから作る．
+ *   地図 … 画像は使わず，最初に表示する場所と拡大率を決めて maps に1行つくる．
+ *
+ * 画像のマップの流れは3段階．
  *   1. 画像を Supabase Storage（map-images バケット）へアップロードする
  *   2. Storage 内の画像を参照する URL を組み立てる
  *   3. maps テーブルに1行つくり，image_url にそのURLを入れてから詳細ページへ移動する
@@ -97,6 +119,14 @@ export default function MapUpload() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  // マップの種類と，地図のマップで最初に表示する場所
+  const [mapType, setMapType] = useState(MAP_TYPE_IMAGE);
+  const [tileView, setTileView] = useState({ ...DEFAULT_CENTER, zoom: DEFAULT_ZOOM, tileStatus: "checking" });
+  const isTile = mapType === MAP_TYPE_TILE;
+  const tileReady = tileView.tileStatus === "ready" && isValidMapView(tileView);
+  const tileStatusMessage = tileView.tileStatus === "unavailable"
+    ? "選んだ場所の地図を読み込めません。地図を動かすか、拡大率を変えてください。"
+    : "地図を読み込んでいます。表示できたら作成できます。";
   const [file, setFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -190,8 +220,12 @@ export default function MapUpload() {
       setError("タイトルを入力してください．");
       return;
     }
-    if (!file) {
+    if (!isTile && !file) {
       setError("マップにする画像を選んでください．");
+      return;
+    }
+    if (isTile && !tileReady) {
+      setError(tileStatusMessage);
       return;
     }
 
@@ -215,11 +249,45 @@ export default function MapUpload() {
       }
 
       // DBの移行が未適用なら、使われない画像をアップロードする前に止める。
-      const { error: schemaError } = await supabase.from("maps").select("visibility").limit(0);
+      // 地図のマップは、地図用の列（map_type など）があるかも確かめる。
+      const { error: schemaError } = await supabase.from("maps")
+        .select(isTile ? "visibility, map_type, center_lat, center_lng, zoom" : "visibility").limit(0);
       if (schemaError) {
         setError(isMapVisibilityMissing(schemaError)
           ? MAP_VISIBILITY_NOT_READY_MESSAGE
-          : `マップ作成に必要な設定を確認できませんでした。${schemaError.message}`);
+          : isTileMapColumnMissingError(schemaError)
+            ? TILE_MAP_UNAVAILABLE_MESSAGE
+            : `マップ作成に必要な設定を確認できませんでした。${schemaError.message}`);
+        return;
+      }
+
+      if (isTile) {
+        // 地図のマップは画像を使わないので，maps に1行つくるだけ
+        const { data: created, error: insertError } = await supabase
+          .from("maps")
+          .insert({
+            title: trimmedTitle,
+            description: description.trim(),
+            user_id: user.id,
+            folder_id: folderId || null,
+            ...mapVisibilityValues(visibility),
+            map_type: MAP_TYPE_TILE,
+            image_url: null,
+            center_lat: tileView.lat,
+            center_lng: tileView.lng,
+            zoom: tileView.zoom,
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error("マップの保存に失敗", insertError);
+          setError(isTileMapColumnMissingError(insertError)
+            ? TILE_MAP_UNAVAILABLE_MESSAGE
+            : getMapCreationErrorMessage(insertError));
+          return;
+        }
+        navigate(`/maps/${created.id}`, { replace: true });
         return;
       }
 
@@ -291,17 +359,54 @@ export default function MapUpload() {
   // これが無いと，壊れた画像を選んだ直後（表示に失敗したと分かる前）に
   // 送信ボタンを押せてしまい，そのままアップロードされる．
   const canSubmit =
-    title.trim() !== "" && file !== null && imageReady && !submitting;
+    title.trim() !== "" && !submitting
+    && (isTile ? tileReady : file !== null && imageReady);
 
   return (
     <div className="h-full overflow-auto">
       <div className="mx-auto w-full max-w-xl px-4 py-4 sm:px-6 sm:py-8">
       <h2 className="text-xl font-bold text-ink">新しいマップを作る</h2>
       <p className="mt-1 text-sm text-sub">
-        好きな画像をアップロードすると，その画像がそのまま地図になります．
+        好きな画像か，実際の地図をもとにマップを作れます．
       </p>
 
       <form onSubmit={handleSubmit} className="mt-5 space-y-5">
+        <fieldset>
+          <legend className="label">マップの種類</legend>
+          <div className="mt-1 grid grid-cols-2 gap-2">
+            {MAP_TYPE_OPTIONS.map((option) => (
+              <label
+                key={option.value}
+                className={`flex cursor-pointer flex-col gap-1 rounded-lg border p-3 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent ${mapType === option.value
+                  ? "border-accent bg-accent-soft"
+                  : "border-line-strong bg-surface hover:border-ink/40"
+                  } ${submitting ? "pointer-events-none opacity-50" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="mapType"
+                  value={option.value}
+                  checked={mapType === option.value}
+                  onChange={() => {
+                    setMapType(option.value);
+                    setError("");
+                    if (option.value === MAP_TYPE_TILE) {
+                      setTileView((previous) => ({ ...previous, tileStatus: "checking" }));
+                    }
+                  }}
+                  disabled={submitting}
+                  className="sr-only"
+                />
+                <span className={`flex items-center gap-1.5 text-sm font-bold ${mapType === option.value ? "text-accent-strong" : "text-ink"}`}>
+                  <Icon name={option.icon} />
+                  {option.label}
+                </span>
+                <span className="text-xs leading-relaxed text-sub">{option.description}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
         <div>
           <label
             htmlFor="title"
@@ -343,6 +448,17 @@ export default function MapUpload() {
 
         <MapVisibilitySelect id="mapVisibility" value={visibility} onChange={setVisibility} disabled={submitting} />
 
+        {isTile ? (
+          <div>
+            <p className="label">最初に表示する場所</p>
+            <div className="mt-1">
+              <Suspense fallback={<div className="h-72 sm:h-96"><Loading /></div>}>
+                <TileMapCenterPicker value={tileView} onChange={setTileView} disabled={submitting} />
+              </Suspense>
+            </div>
+          </div>
+        ) : (
+        <>
         <div>
           <p className="label">
             マップにする画像
@@ -397,6 +513,8 @@ export default function MapUpload() {
             />
           </div>
         )}
+        </>
+        )}
 
         {/* エラーは送信ボタンのすぐ上に出す．画面の一番上に出すと，
             プレビューでスクロールしたときに視界から外れて気づけない． */}
@@ -410,16 +528,20 @@ export default function MapUpload() {
           >
             {!submitting
               ? "このマップを作る"
-              : submitStage === "optimizing"
+              : isTile
+                ? "作成中…"
+                : submitStage === "optimizing"
                 ? "画像を軽くしています…"
                 : "アップロード中…"}
           </button>
 
           {!submitting && !canSubmit && (
-            <p className="mt-2 text-sm text-sub">
-              {file && !imageReady
-                ? "画像を読み込んでいます．表示できたら送信できます．"
-                : "タイトルと画像の両方を入れると送信できます．"}
+            <p role={isTile ? "status" : undefined} className="mt-2 text-sm text-sub">
+              {isTile
+                ? tileReady ? "タイトルを入れると送信できます．" : tileStatusMessage
+                : file && !imageReady
+                  ? "画像を読み込んでいます．表示できたら送信できます．"
+                  : "タイトルと画像の両方を入れると送信できます．"}
             </p>
           )}
         </div>

@@ -114,7 +114,8 @@ export function PinPanel({
   // 別のピンを選び直したときに入力欄を作り直す．
   // pin.id が無い（新規作成）ときは座標を鍵にして，
   // 別の場所をクリックしたら空の状態に戻るようにする．
-  const key = pin?.id ?? `${pin?.x}-${pin?.y}`;
+  // 地図のマップ（lib/tileMaps.js）では x, y の代わりに緯度経度（lat, lng）で位置を持つので，両方を鍵に入れる．
+  const key = pin?.id ?? `${pin?.x}-${pin?.y}-${pin?.lat}-${pin?.lng}`;
 
   const [panelCollapsed, setPanelCollapsed] = useState(false);
 
