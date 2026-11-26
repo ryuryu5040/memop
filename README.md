@@ -2,9 +2,9 @@
 
 画像をマップとして登録し、気になる場所にピンを立ててメモやコメントを残せる Web アプリです。マップはフォルダに整理でき、公開・URL限定公開マップを共有したり、あとで見たいマップを保存したりできます。
 
-React、Vite、Supabase を使っています。ログインは GitHub、Google、またはメールで行います。
+React、Vite、Supabase を使っています。ログインは GitHub または Google で行います。
 
-Supabase Auth にはログイン用メールの送信回数に上限があるため、できるだけ GitHub または Google アカウントでログインしてください。
+メールアドレスでのログインは、Supabase Auth のメール送信の上限のため一時的に停止しています（#32）。再開するときは `src/components/AuthButton.jsx` の `SHOW_EMAIL_LOGIN` を `true` にします。
 
 ## 開発の進め方
 
