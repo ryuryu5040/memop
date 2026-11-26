@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { PIN_TYPES, getPinEmoji } from "../lib/pinTypes";
+import { PIN_CATEGORIES, formatPinCategory, getPinCategory, getPinSubcategory } from "../lib/pinCategories";
 import { renderTextWithLinks } from "../lib/linkify";
 import { supabase } from "../lib/supabase";
 import { getGithubUsername } from "../lib/displayName";
@@ -23,7 +24,7 @@ import { scrollBehavior } from "../lib/motion.js";
  *   saving     保存中かどうか
  *   error      保存に失敗したときの文言
  *   mapOptions ボタン種類の移動先として選べるマップの一覧．[{ id, title }]（#67）
- *   onSave     { title, content, pinType, kind, linkMapId, tabelogUrl } を受け取って保存する．新規作成のときだけ使う
+ *   onSave     { title, content, pinType, category, subcategory, kind, linkMapId, tabelogUrl } を受け取って保存する．新規作成のときだけ使う
  *   onClose    閉じる
  *
  * id があるかどうかで «表示» と «新規作成» を切り替える．
@@ -71,6 +72,10 @@ export function PinPanel({
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [pinType, setPinType] = useState(PIN_TYPES[0].value);
+  // 何の場所か（lib/pinCategories.js）．どちらも任意で，選ばないときは null
+  const [category, setCategory] = useState(null);
+  const [subcategory, setSubcategory] = useState(null);
+  const selectedCategory = getPinCategory(category);
   // ピンの種類（メモ／ボタン）と，ボタンのときの移動先（#67）
   const [kind, setKind] = useState("pin");
   const [linkMapId, setLinkMapId] = useState("");
@@ -127,6 +132,7 @@ export function PinPanel({
     setKind(pin?.kind ?? "pin");
     setLinkMapId(pin?.link_map_id ?? "");
     setTabelogUrl(pin?.tabelog_url ?? "");
+    resetCategory(pin?.category, pin?.subcategory);
     // 既存4種類に含まれない場合は自由入力として扱う
     const isCustomPinType =
       pin?.pin_type &&
@@ -141,6 +147,8 @@ export function PinPanel({
     pin?.title,
     pin?.content,
     pin?.pin_type,
+    pin?.category,
+    pin?.subcategory,
     pin?.kind,
     pin?.link_map_id,
     pin?.tabelog_url,
@@ -156,6 +164,22 @@ export function PinPanel({
     }
   }, [isNew, linkMapId, firstMapOptionId]);
 
+  // 保存済みの値をカテゴリ欄に戻す．
+  // 一覧から外れた値（定義を消したなど）は「なし」として扱い，選べない値を残さない．
+  function resetCategory(savedCategoryValue, savedSubcategoryValue) {
+    const savedCategory = getPinCategory(savedCategoryValue)?.value ?? null;
+    setCategory(savedCategory);
+    setSubcategory(
+      getPinSubcategory(savedCategory, savedSubcategoryValue)?.value ?? null,
+    );
+  }
+
+  // カテゴリを選び直したら，前のカテゴリのサブカテゴリは合わなくなるので外す
+  function handleCategoryChange(value) {
+    setCategory(value);
+    setSubcategory(null);
+  }
+
   useEffect(() => {
     if (!isNew && !isEditing) return;
 
@@ -167,8 +191,10 @@ export function PinPanel({
     onPreviewChange?.({
       kind,
       pin_type: previewPinType,
+      category: kind === "button" ? null : category,
+      subcategory: kind === "button" ? null : subcategory,
     });
-  }, [isNew, isEditing, kind, pinType, customPinType, onPreviewChange]);
+  }, [isNew, isEditing, kind, pinType, customPinType, category, subcategory, onPreviewChange]);
 
   // コメントの取得とRealtime購読のセットアップ
   useEffect(() => {
@@ -382,6 +408,9 @@ export function PinPanel({
       title: title.trim(),
       content: kind === "button" ? "" : content.trim(),
       pinType: savedPinType,
+      // マップ移動のボタンは場所ではないので，カテゴリを持たせない
+      category: kind === "button" ? null : category,
+      subcategory: kind === "button" ? null : subcategory,
       kind,
       linkMapId: kind === "button" ? linkMapId : null,
       tabelogUrl: kind === "button" ? null : normalizedTabelogUrl,
@@ -401,6 +430,7 @@ export function PinPanel({
     setKind(pin?.kind ?? "pin");
     setLinkMapId(pin?.link_map_id ?? mapOptions[0]?.id ?? "");
     setTabelogUrl(pin?.tabelog_url ?? "");
+    resetCategory(pin?.category, pin?.subcategory);
     setShowOnlyMyMaps(false);
 
     // 既存4種類に含まれない場合は自由入力として元に戻す
@@ -651,6 +681,77 @@ export function PinPanel({
                     )}
                   </div>
 
+                  {/*
+                    何の場所か（任意）．アイコン（見た目の種類）とは別の項目．
+                    スマホで長い一覧をスクロールさせないよう，カテゴリはチップを横に流して並べ，
+                    選んだカテゴリのサブカテゴリだけを続けて出す．
+                  */}
+                  <div>
+                    <p id="pin-category-label" className="text-xs font-bold text-sub">カテゴリ（任意）</p>
+                    <div role="group" aria-labelledby="pin-category-label" className="mt-1.5 flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleCategoryChange(null)}
+                        disabled={saving}
+                        aria-pressed={category === null}
+                        className={chipClassName(category === null)}
+                      >
+                        なし
+                      </button>
+                      {PIN_CATEGORIES.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => handleCategoryChange(option.value)}
+                          disabled={saving}
+                          aria-pressed={category === option.value}
+                          className={chipClassName(category === option.value)}
+                        >
+                          {option.emoji} {option.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {selectedCategory && selectedCategory.subcategories.length > 0 && (
+                      <div className="mt-2 rounded-lg bg-paper p-2">
+                        <p id="pin-subcategory-label" className="text-xs font-bold text-sub">
+                          {selectedCategory.emoji} {selectedCategory.label}の種類（任意）
+                        </p>
+                        {/*
+                          食事は13種類あり，スマホで折り返すとパネルの高さを使い切ってしまう．
+                          スマホでは2段に並べて横にスクロールさせ，広い画面では折り返して全部見せる．
+                        */}
+                        <div
+                          role="group"
+                          aria-labelledby="pin-subcategory-label"
+                          className="-mx-2 mt-1.5 grid auto-cols-max grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto overscroll-x-contain px-2 pb-1 sm:mx-0 sm:flex sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setSubcategory(null)}
+                            disabled={saving}
+                            aria-pressed={subcategory === null}
+                            className={chipClassName(subcategory === null)}
+                          >
+                            指定しない
+                          </button>
+                          {selectedCategory.subcategories.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setSubcategory(option.value)}
+                              disabled={saving}
+                              aria-pressed={subcategory === option.value}
+                              className={chipClassName(subcategory === option.value)}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* 食べログの店舗ページ URL（任意，#5） */}
                   <div>
                     <label htmlFor="pin-tabelog-url" className="text-xs font-bold text-sub">
@@ -724,6 +825,15 @@ export function PinPanel({
             {pin.creator_username && (
               <p className="mb-1 text-xs text-faint">
                 @{pin.creator_username.replace(/^@/, "")}
+              </p>
+            )}
+
+            {pin.kind !== "button" && formatPinCategory(pin) && (
+              <p className="mb-2">
+                <span className="inline-block rounded-full bg-accent-soft px-2.5 py-0.5 text-xs font-bold text-accent-strong">
+                  <span className="sr-only">カテゴリ：</span>
+                  {formatPinCategory(pin)}
+                </span>
               </p>
             )}
 

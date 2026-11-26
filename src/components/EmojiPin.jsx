@@ -13,8 +13,13 @@ const PIN_SIZES = {
   },
 };
 
+/**
+ * badge は，ピンの右上に小さく重ねる絵文字（カテゴリ．lib/pinCategories.js）．
+ * 本体の絵文字（種類）は変えずに，何の場所かを見分けられるようにする．
+ */
 export function EmojiPin({
   emoji,
+  badge = null,
   preview = false,
   selected = false,
   size = "sm",
@@ -31,6 +36,15 @@ export function EmojiPin({
         preview ? "opacity-70" : ""
       }`}
     >
+      {/* 本体は overflow-hidden なので，バッジは本体の外（外側の枠）に重ねる */}
+      {badge && (
+        <span
+          aria-hidden="true"
+          className="absolute -right-2 -top-2 z-20 flex size-5 items-center justify-center rounded-full border border-ink/40 bg-white text-[0.7rem] leading-none shadow-sm"
+        >
+          {badge}
+        </span>
+      )}
       <span
         className={`
           relative z-10 flex w-max items-center justify-center

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { getPinEmoji } from "../lib/pinTypes";
+import { getPinCategory } from "../lib/pinCategories";
 import { useMapImage } from "../lib/mapImages";
 import { EmojiPin } from "./EmojiPin"
 import Icon from "./Icon.jsx";
@@ -686,7 +687,12 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
                   </span>
                 </span>
               ) : (
-                <EmojiPin emoji={getPinEmoji(pin.pin_type)} selected={isSelected} size="sm" />
+                <EmojiPin
+                  emoji={getPinEmoji(pin.pin_type)}
+                  badge={getPinCategory(pin.category)?.emoji}
+                  selected={isSelected}
+                  size="sm"
+                />
 
               )}
             </button>
@@ -708,7 +714,12 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
                   🚪
                 </span>
               ) : (
-                <EmojiPin emoji={getPinEmoji(pendingPin.pin_type)} preview size="sm" />
+                <EmojiPin
+                  emoji={getPinEmoji(pendingPin.pin_type)}
+                  badge={getPinCategory(pendingPin.category)?.emoji}
+                  preview
+                  size="sm"
+                />
               )}
             </div>
           )}
