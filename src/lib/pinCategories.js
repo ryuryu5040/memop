@@ -137,7 +137,25 @@ export function formatPinCategory(pin) {
  */
 export const NO_CATEGORY_FILTER = "__none__";
 export function subcategoryFilterKey(categoryValue, subcategoryValue) {
-  return `${categoryValue}:${subcategoryValue}`;
+  return `${categoryValue}:${subcategoryValue ?? NO_CATEGORY_FILTER}`;
+}
+
+export function togglePinSubcategoryFilter(hiddenKeys, categoryValue, subcategoryValue) {
+  const next = new Set(hiddenKeys);
+  const key = subcategoryFilterKey(categoryValue, subcategoryValue);
+
+  if (next.delete(categoryValue)) {
+    // 親カテゴリが非表示なら，選んだサブカテゴリだけを表示に戻す．
+    for (const subcategory of getPinCategory(categoryValue).subcategories) {
+      next.add(subcategoryFilterKey(categoryValue, subcategory.value));
+    }
+    next.add(subcategoryFilterKey(categoryValue, null));
+    next.delete(key);
+  } else if (!next.delete(key)) {
+    next.add(key);
+  }
+
+  return next;
 }
 
 /**
@@ -148,8 +166,7 @@ export function isPinCategoryHidden(pin, hiddenKeys) {
   const category = getPinCategory(pin?.category);
   if (!category) return hiddenKeys.has(NO_CATEGORY_FILTER);
   if (hiddenKeys.has(category.value)) return true;
-  return Boolean(pin.subcategory)
-    && hiddenKeys.has(subcategoryFilterKey(category.value, pin.subcategory));
+  return hiddenKeys.has(subcategoryFilterKey(category.value, pin.subcategory));
 }
 
 export const PIN_CATEGORY_UNAVAILABLE_MESSAGE =

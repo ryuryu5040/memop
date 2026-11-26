@@ -174,8 +174,9 @@ export function PinPanel({
     );
   }
 
-  // カテゴリを選び直したら，前のカテゴリのサブカテゴリは合わなくなるので外す
+  // カテゴリが変わったときだけ，前のサブカテゴリを外す
   function handleCategoryChange(value) {
+    if (value === category) return;
     setCategory(value);
     setSubcategory(null);
   }

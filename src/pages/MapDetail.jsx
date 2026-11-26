@@ -24,6 +24,7 @@ import {
   isPinCategoryColumnMissingError,
   PIN_CATEGORY_UNAVAILABLE_MESSAGE,
   subcategoryFilterKey,
+  togglePinSubcategoryFilter,
 } from "../lib/pinCategories";
 import ThreeDotMenu, {
   MenuItem,
@@ -260,14 +261,20 @@ export default function MapDetail({ currentUser, isAdmin }) {
   // マップ移動のボタンは場所ではないので数えない．
   const placePins = pins.filter((pin) => pin.kind !== "button");
   const usedCategories = PIN_CATEGORIES
-    .filter((category) => placePins.some((pin) => pin.category === category.value))
-    .map((category) => ({
-      ...category,
-      subcategories: category.subcategories.filter((subcategory) =>
-        placePins.some((pin) => pin.category === category.value && pin.subcategory === subcategory.value),
-      ),
-    }));
+    .flatMap((category) => {
+      const categoryPins = placePins.filter((pin) => pin.category === category.value);
+      if (categoryPins.length === 0) return [];
+
+      const subcategories = category.subcategories.filter((subcategory) =>
+        categoryPins.some((pin) => pin.subcategory === subcategory.value),
+      );
+      if (categoryPins.some((pin) => pin.subcategory == null)) {
+        subcategories.push({ value: null, label: "サブカテゴリ未指定" });
+      }
+      return [{ ...category, subcategories }];
+    });
   const hasUncategorizedPins = placePins.some((pin) => !formatPinCategory(pin));
+  const categoryFilterActive = placePins.some((pin) => isPinCategoryHidden(pin, hiddenCategoryKeys));
 
   function toggleHiddenKey(keys, key) {
     const next = new Set(keys);
@@ -276,33 +283,17 @@ export default function MapDetail({ currentUser, isAdmin }) {
     return next;
   }
 
-  function handleCategoryToggle(category) {
+  function handleCategoryToggle(categoryValue, visible) {
     setHiddenCategoryKeys((current) => {
       const next = new Set(current);
-      if (next.has(category.value)) {
+      if (visible) {
         // 表示に戻すときは，サブカテゴリもまとめて表示に戻す
-        next.delete(category.value);
-        for (const subcategory of category.subcategories) {
-          next.delete(subcategoryFilterKey(category.value, subcategory.value));
+        next.delete(categoryValue);
+        for (const key of next) {
+          if (key.startsWith(`${categoryValue}:`)) next.delete(key);
         }
       } else {
-        next.add(category.value);
-      }
-      return next;
-    });
-  }
-
-  function handleSubcategoryToggle(category, subcategoryValue) {
-    const key = subcategoryFilterKey(category.value, subcategoryValue);
-    setHiddenCategoryKeys((current) => {
-      if (!current.has(category.value)) return toggleHiddenKey(current, key);
-      // カテゴリごと隠しているときにサブカテゴリを1つ選んだら，そのサブカテゴリだけを表示する
-      const next = new Set(current);
-      next.delete(category.value);
-      for (const subcategory of category.subcategories) {
-        if (subcategory.value !== subcategoryValue) {
-          next.add(subcategoryFilterKey(category.value, subcategory.value));
-        }
+        next.add(categoryValue);
       }
       return next;
     });
@@ -312,7 +303,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
   const filtersActive =
     searchQuery.trim() !== "" ||
     showOnlyMyPins ||
-    hiddenCategoryKeys.size > 0 ||
+    categoryFilterActive ||
     availablePinTypes.some((type) => !isTypeEnabled(type.value));
 
   // 表示対象のピンに絞り込む（種類フィルタ × タイトル検索のAND条件）．
@@ -1488,7 +1479,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
               </div>
 
               {/* カテゴリ（何の場所か）．このマップで使われているものだけを出す． */}
-              {(usedCategories.length > 0) && (
+              {(usedCategories.length > 0 || categoryFilterActive) && (
                 <div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-bold text-sub">
@@ -1508,10 +1499,13 @@ export default function MapDetail({ currentUser, isAdmin }) {
                   <ul className="space-y-0.5">
                     {usedCategories.map((category) => {
                       const categoryHidden = hiddenCategoryKeys.has(category.value);
-                      const someSubcategoryHidden = category.subcategories.some((subcategory) =>
-                        hiddenCategoryKeys.has(subcategoryFilterKey(category.value, subcategory.value)),
+                      const visibleCount = categoryHidden ? 0 : category.subcategories.filter((subcategory) =>
+                        !hiddenCategoryKeys.has(subcategoryFilterKey(category.value, subcategory.value)),
+                      ).length;
+                      const canExpand = category.subcategories.some((subcategory) =>
+                        subcategory.value !== null,
                       );
-                      const expanded = expandedCategories.has(category.value);
+                      const expanded = canExpand && expandedCategories.has(category.value);
                       const subListId = `filter-subcategories-${category.value}`;
 
                       return (
@@ -1520,12 +1514,12 @@ export default function MapDetail({ currentUser, isAdmin }) {
                             <label className="flex min-h-10 min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-ink sm:min-h-8">
                               <input
                                 type="checkbox"
-                                checked={!categoryHidden}
+                                checked={visibleCount > 0}
                                 // 一部のサブカテゴリだけ隠しているときは「一部だけ表示」の印（−）にする
                                 ref={(element) => {
-                                  if (element) element.indeterminate = !categoryHidden && someSubcategoryHidden;
+                                  if (element) element.indeterminate = visibleCount > 0 && visibleCount < category.subcategories.length;
                                 }}
-                                onChange={() => handleCategoryToggle(category)}
+                                onChange={(event) => handleCategoryToggle(category.value, event.target.checked)}
                                 className="size-4 shrink-0 accent-accent"
                               />
                               <span className="min-w-0 truncate">
@@ -1533,7 +1527,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
                               </span>
                             </label>
 
-                            {category.subcategories.length > 0 && (
+                            {canExpand && (
                               <button
                                 type="button"
                                 onClick={() => setExpandedCategories((current) => toggleHiddenKey(current, category.value))}
@@ -1551,7 +1545,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
                             <div id={subListId} className="mb-1 ml-6 flex flex-wrap gap-x-4">
                               {category.subcategories.map((subcategory) => (
                                 <label
-                                  key={subcategory.value}
+                                  key={subcategoryFilterKey(category.value, subcategory.value)}
                                   className="flex min-h-10 min-w-0 max-w-full cursor-pointer items-center gap-2 text-sm text-ink sm:min-h-8"
                                 >
                                   <input
@@ -1560,7 +1554,9 @@ export default function MapDetail({ currentUser, isAdmin }) {
                                       !categoryHidden &&
                                       !hiddenCategoryKeys.has(subcategoryFilterKey(category.value, subcategory.value))
                                     }
-                                    onChange={() => handleSubcategoryToggle(category, subcategory.value)}
+                                    onChange={() => setHiddenCategoryKeys((current) =>
+                                      togglePinSubcategoryFilter(current, category.value, subcategory.value),
+                                    )}
                                     className="size-4 shrink-0 accent-accent"
                                   />
                                   <span className="min-w-0 truncate">{subcategory.label}</span>

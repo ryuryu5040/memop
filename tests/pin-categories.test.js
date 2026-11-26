@@ -8,6 +8,7 @@ import {
   formatPinCategory,
   isPinCategoryHidden,
   subcategoryFilterKey,
+  togglePinSubcategoryFilter,
 } from "../src/lib/pinCategories.js";
 
 // 実データを使わず，pins テーブルに今回の SQL だけを当てて確かめる．
@@ -78,4 +79,22 @@ test("絞り込みで隠したカテゴリ・サブカテゴリのピンだけ�
   assert.equal(isPinCategoryHidden(foodOnly, new Set([subcategoryFilterKey("food", "ramen")])), false);
   assert.equal(isPinCategoryHidden(none, new Set(["food"])), false);
   assert.equal(isPinCategoryHidden(none, new Set([NO_CATEGORY_FILTER])), true);
+});
+
+test("非表示のカテゴリからサブカテゴリを選ぶと，そのピンだけ表示に戻る", () => {
+  const ramen = { category: "food", subcategory: "ramen" };
+  const cafe = { category: "food", subcategory: "cafe" };
+  const foodOnly = { category: "food", subcategory: null };
+  const shopping = { category: "shopping", subcategory: null };
+  const otherCategory = { category: "nature", subcategory: "park" };
+  const keys = new Set([subcategoryFilterKey("food", "ramen"), "food", "shopping"]);
+
+  const withRamen = togglePinSubcategoryFilter(keys, "food", "ramen");
+  assert.deepEqual(
+    [ramen, cafe, foodOnly, shopping, otherCategory].filter((pin) => !isPinCategoryHidden(pin, withRamen)),
+    [ramen, otherCategory],
+  );
+
+  const withUnspecified = togglePinSubcategoryFilter(withRamen, "food", null);
+  assert.equal(isPinCategoryHidden(foodOnly, withUnspecified), false);
 });
