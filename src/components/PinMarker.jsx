@@ -1,4 +1,5 @@
 import { getPinEmoji } from "../lib/pinTypes";
+import { getPinCategory } from "../lib/pinCategories";
 import { EmojiPin } from "./EmojiPin";
 
 /**
@@ -29,7 +30,15 @@ export function PinMarker({ pin, selected = false }) {
     );
   }
 
-  return <EmojiPin emoji={getPinEmoji(pin.pin_type)} selected={selected} size="sm" />;
+  // 右上の小さな絵文字は，ピンのカテゴリ（何の場所か．lib/pinCategories.js）
+  return (
+    <EmojiPin
+      emoji={getPinEmoji(pin.pin_type)}
+      badge={getPinCategory(pin.category)?.emoji}
+      selected={selected}
+      size="sm"
+    />
+  );
 }
 
 /** 新しいピンを追加しようとしている場所に出す，半透明の仮のピン */
@@ -41,5 +50,12 @@ export function PendingPinMarker({ pin }) {
       </span>
     );
   }
-  return <EmojiPin emoji={getPinEmoji(pin.pin_type)} preview size="sm" />;
+  return (
+    <EmojiPin
+      emoji={getPinEmoji(pin.pin_type)}
+      badge={getPinCategory(pin.category)?.emoji}
+      preview
+      size="sm"
+    />
+  );
 }

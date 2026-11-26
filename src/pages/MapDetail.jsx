@@ -17,6 +17,16 @@ import { normalizeSearchText } from "../lib/searchText";
 import SaveToMyListButton from "../components/SaveToMyListButton";
 import { getGithubUsername } from "../lib/displayName";
 import { TABELOG_URL_UNAVAILABLE_MESSAGE, isTabelogColumnMissingError } from "../lib/tabelogUrl";
+import {
+  NO_CATEGORY_FILTER,
+  PIN_CATEGORIES,
+  formatPinCategory,
+  isPinCategoryHidden,
+  isPinCategoryColumnMissingError,
+  PIN_CATEGORY_UNAVAILABLE_MESSAGE,
+  subcategoryFilterKey,
+  togglePinSubcategoryFilter,
+} from "../lib/pinCategories";
 import ThreeDotMenu, {
   MenuItem,
 } from "../components/ThreeDotMenu";
@@ -30,6 +40,13 @@ const MAP_BUTTON_FILTER = "kind:button";
 
 // 地図のマップの表示部品．Leaflet を含むので，地図のマップを開いたときだけ読み込む
 const TileMapView = lazy(() => import("../components/TileMapView.jsx"));
+
+/** ピンの保存・更新に失敗したときの文言．SQL 未適用で列が無いときは，空欄にすれば保存できると案内する */
+function pinSaveErrorMessage(error, action) {
+  if (isTabelogColumnMissingError(error)) return TABELOG_URL_UNAVAILABLE_MESSAGE;
+  if (isPinCategoryColumnMissingError(error)) return PIN_CATEGORY_UNAVAILABLE_MESSAGE;
+  return `${action}に失敗しました．${error.message}`;
+}
 
 /**
  * マップ詳細ページ．
@@ -69,6 +86,8 @@ export default function MapDetail({ currentUser, isAdmin }) {
   const [pendingPinAppearance, setPendingPinAppearance] = useState({
     kind: "pin",
     pin_type: PIN_TYPES[0].value,
+    category: null,
+    subcategory: null,
   });
 
   const [savingPin, setSavingPin] = useState(false);
@@ -234,10 +253,59 @@ export default function MapDetail({ currentUser, isAdmin }) {
     setTypeVisibility({});
   }
 
+  // カテゴリの絞り込み．隠しているカテゴリ（"food"）とサブカテゴリ（"food:ramen"）の鍵を持つ．
+  // 何も入っていなければすべて表示．
+  const [hiddenCategoryKeys, setHiddenCategoryKeys] = useState(() => new Set());
+  // サブカテゴリの一覧を開いているカテゴリ．長い一覧でスクロールさせないよう，最初は閉じておく．
+  const [expandedCategories, setExpandedCategories] = useState(() => new Set());
+
+  // このマップで使われているカテゴリとサブカテゴリだけを絞り込みに出す（一覧を短く保つため）．
+  // マップ移動のボタンは場所ではないので数えない．
+  const placePins = pins.filter((pin) => pin.kind !== "button");
+  const usedCategories = PIN_CATEGORIES
+    .flatMap((category) => {
+      const categoryPins = placePins.filter((pin) => pin.category === category.value);
+      if (categoryPins.length === 0) return [];
+
+      const subcategories = category.subcategories.filter((subcategory) =>
+        categoryPins.some((pin) => pin.subcategory === subcategory.value),
+      );
+      if (categoryPins.some((pin) => pin.subcategory == null)) {
+        subcategories.push({ value: null, label: "サブカテゴリ未指定" });
+      }
+      return [{ ...category, subcategories }];
+    });
+  const hasUncategorizedPins = placePins.some((pin) => !formatPinCategory(pin));
+  const categoryFilterActive = placePins.some((pin) => isPinCategoryHidden(pin, hiddenCategoryKeys));
+
+  function toggleHiddenKey(keys, key) {
+    const next = new Set(keys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  }
+
+  function handleCategoryToggle(categoryValue, visible) {
+    setHiddenCategoryKeys((current) => {
+      const next = new Set(current);
+      if (visible) {
+        // 表示に戻すときは，サブカテゴリもまとめて表示に戻す
+        next.delete(categoryValue);
+        for (const key of next) {
+          if (key.startsWith(`${categoryValue}:`)) next.delete(key);
+        }
+      } else {
+        next.add(categoryValue);
+      }
+      return next;
+    });
+  }
+
   // 絞り込みが効いているかどうか．開閉ボタンに印を出して，閉じていても気づけるようにする．
   const filtersActive =
     searchQuery.trim() !== "" ||
     showOnlyMyPins ||
+    categoryFilterActive ||
     availablePinTypes.some((type) => !isTypeEnabled(type.value));
 
   // 表示対象のピンに絞り込む（種類フィルタ × タイトル検索のAND条件）．
@@ -263,7 +331,11 @@ export default function MapDetail({ currentUser, isAdmin }) {
     const isCreatorMatch =
       !showOnlyMyPins || pin.user_id === currentUser?.id;
 
-    return isTypeMatch && isTitleMatch && isCreatorMatch;
+    // マップ移動のボタンはカテゴリを持たないので，カテゴリの絞り込みは当てない
+    const isCategoryMatch =
+      pin.kind === "button" || !isPinCategoryHidden(pin, hiddenCategoryKeys);
+
+    return isTypeMatch && isTitleMatch && isCreatorMatch && isCategoryMatch;
   });
   const displayPins = visiblePins.map((pin) =>
     isEditingPin && pin.id === selectedPin?.id
@@ -291,6 +363,8 @@ export default function MapDetail({ currentUser, isAdmin }) {
     setDefaultTypeVisible(true);
     setTypeVisibility({});
     setShowOnlyMyPins(false);
+    setHiddenCategoryKeys(new Set());
+    setExpandedCategories(new Set());
 
     try {
       // 1. mapsテーブルから、URLのIDに一致するマップを取得
@@ -838,7 +912,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
   }
 
   /** パネルの入力を pins テーブルに保存する */
-  async function handleSavePin({ title, content, pinType, kind, linkMapId, tabelogUrl = null }) {
+  async function handleSavePin({ title, content, pinType, category = null, subcategory = null, kind, linkMapId, tabelogUrl = null }) {
     if (savingPin || !selectedPin) return;
 
     setSavingPin(true);
@@ -874,15 +948,15 @@ export default function MapDetail({ currentUser, isAdmin }) {
           creator_username: getGithubUsername(user),
           // 食べログ URL は入力したときだけ送る．空欄なら，SQL 未適用の環境でもこれまでどおり保存できる（#5）
           ...(tabelogUrl ? { tabelog_url: tabelogUrl } : {}),
+          // カテゴリも選んだときだけ送る．「なし」なら，SQL 未適用の環境でもこれまでどおり保存できる
+          ...(category ? { category, subcategory } : {}),
         })
         .select()
         .single();
 
       if (insertError) {
         console.error("ピンの保存に失敗", insertError);
-        setPinError(isTabelogColumnMissingError(insertError)
-          ? TABELOG_URL_UNAVAILABLE_MESSAGE
-          : `保存に失敗しました．${insertError.message}`);
+        setPinError(pinSaveErrorMessage(insertError, "保存"));
         return;
       }
 
@@ -904,7 +978,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
   }
 
   /** パネルで編集した内容を更新する */
-  async function handleUpdatePin({ title, content, pinType, kind, linkMapId, tabelogUrl = null }) {
+  async function handleUpdatePin({ title, content, pinType, category = null, subcategory = null, kind, linkMapId, tabelogUrl = null }) {
     if (savingPin || !selectedPin) return;
 
     setSavingPin(true);
@@ -935,6 +1009,10 @@ export default function MapDetail({ currentUser, isAdmin }) {
           link_map_id: kind === "button" ? linkMapId : null,
           // 食べログ URL は変えたときだけ送る．触っていなければ，SQL 未適用の環境でもこれまでどおり更新できる（#5）
           ...(tabelogUrl !== (selectedPin.tabelog_url ?? null) ? { tabelog_url: tabelogUrl } : {}),
+          // カテゴリも変えたときだけ送る（食べログ URL と同じ考え方）
+          ...(category !== (selectedPin.category ?? null) || subcategory !== (selectedPin.subcategory ?? null)
+            ? { category, subcategory }
+            : {}),
         })
         .eq("id", selectedPin.id)
         .select()
@@ -942,9 +1020,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
 
       if (updateError) {
         console.error("ピンの更新に失敗", updateError);
-        setPinError(isTabelogColumnMissingError(updateError)
-          ? TABELOG_URL_UNAVAILABLE_MESSAGE
-          : `更新に失敗しました．${updateError.message}`);
+        setPinError(pinSaveErrorMessage(updateError, "更新"));
         return;
       }
 
@@ -1405,6 +1481,114 @@ export default function MapDetail({ currentUser, isAdmin }) {
                   ))}
                 </div>
               </div>
+
+              {/* カテゴリ（何の場所か）．このマップで使われているものだけを出す． */}
+              {(usedCategories.length > 0 || categoryFilterActive) && (
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-sub">
+                      表示するカテゴリ
+                    </span>
+                    <span className="flex items-center text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setHiddenCategoryKeys(new Set())}
+                        className="rounded px-2 py-2 text-accent-strong hover:underline"
+                      >
+                        すべて表示
+                      </button>
+                    </span>
+                  </div>
+
+                  <ul className="space-y-0.5">
+                    {usedCategories.map((category) => {
+                      const categoryHidden = hiddenCategoryKeys.has(category.value);
+                      const visibleCount = categoryHidden ? 0 : category.subcategories.filter((subcategory) =>
+                        !hiddenCategoryKeys.has(subcategoryFilterKey(category.value, subcategory.value)),
+                      ).length;
+                      const canExpand = category.subcategories.some((subcategory) =>
+                        subcategory.value !== null,
+                      );
+                      const expanded = canExpand && expandedCategories.has(category.value);
+                      const subListId = `filter-subcategories-${category.value}`;
+
+                      return (
+                        <li key={category.value}>
+                          <div className="flex items-center gap-1">
+                            <label className="flex min-h-10 min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-ink sm:min-h-8">
+                              <input
+                                type="checkbox"
+                                checked={visibleCount > 0}
+                                // 一部のサブカテゴリだけ隠しているときは「一部だけ表示」の印（−）にする
+                                ref={(element) => {
+                                  if (element) element.indeterminate = visibleCount > 0 && visibleCount < category.subcategories.length;
+                                }}
+                                onChange={(event) => handleCategoryToggle(category.value, event.target.checked)}
+                                className="size-4 shrink-0 accent-accent"
+                              />
+                              <span className="min-w-0 truncate">
+                                {category.emoji} {category.label}
+                              </span>
+                            </label>
+
+                            {canExpand && (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedCategories((current) => toggleHiddenKey(current, category.value))}
+                                aria-expanded={expanded}
+                                aria-controls={subListId}
+                                aria-label={`${category.label}の種類で絞り込む`}
+                                className="btn-icon"
+                              >
+                                <Icon name={expanded ? "chevronUp" : "chevronDown"} className="size-4" />
+                              </button>
+                            )}
+                          </div>
+
+                          {expanded && (
+                            <div id={subListId} className="mb-1 ml-6 flex flex-wrap gap-x-4">
+                              {category.subcategories.map((subcategory) => (
+                                <label
+                                  key={subcategoryFilterKey(category.value, subcategory.value)}
+                                  className="flex min-h-10 min-w-0 max-w-full cursor-pointer items-center gap-2 text-sm text-ink sm:min-h-8"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={
+                                      !categoryHidden &&
+                                      !hiddenCategoryKeys.has(subcategoryFilterKey(category.value, subcategory.value))
+                                    }
+                                    onChange={() => setHiddenCategoryKeys((current) =>
+                                      togglePinSubcategoryFilter(current, category.value, subcategory.value),
+                                    )}
+                                    className="size-4 shrink-0 accent-accent"
+                                  />
+                                  <span className="min-w-0 truncate">{subcategory.label}</span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+
+                    {hasUncategorizedPins && (
+                      <li>
+                        <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm text-ink sm:min-h-8">
+                          <input
+                            type="checkbox"
+                            checked={!hiddenCategoryKeys.has(NO_CATEGORY_FILTER)}
+                            onChange={() => setHiddenCategoryKeys((current) => toggleHiddenKey(current, NO_CATEGORY_FILTER))}
+                            className="size-4 shrink-0 accent-accent"
+                          />
+                          <span>カテゴリなし</span>
+                        </label>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
               {currentUser && (
                 <label className="flex min-h-10 cursor-pointer items-center gap-2 border-t border-line pt-2 text-sm text-ink sm:min-h-8">
                   <input
@@ -1445,8 +1629,13 @@ export default function MapDetail({ currentUser, isAdmin }) {
                             : getPinEmoji(pin.pin_type)}
                         </span>
 
-                        <span className="min-w-0 truncate">
-                          {pin.title}
+                        <span className="min-w-0 py-1">
+                          <span className="block truncate">{pin.title}</span>
+                          {pin.kind !== "button" && formatPinCategory(pin) && (
+                            <span className="block truncate text-xs font-normal text-sub">
+                              {formatPinCategory(pin)}
+                            </span>
+                          )}
                         </span>
                       </button>
                     </li>
