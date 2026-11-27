@@ -6,14 +6,21 @@ import Icon from "./Icon.jsx";
 /**
  * 住所からピンを置くための検索カード（#25）．
  *
- * 住所を検索して得た緯度経度を，マップの目印から作った変換式（transform．lib/addressPins.js）で
- * 画像上の位置に直し，onPlace({ x, y }) で知らせる．位置は目安なので，置いたあとにドラッグで調整できる．
+ * 住所を検索して得た緯度経度を，ピンの位置に直して onPlace(position) で知らせる．
+ *   地図のマップ（transform を渡さない）… 位置は緯度経度なので，そのまま { lat, lng } を渡す
+ *   画像のマップ（transform を渡す）    … マップの目印から作った変換式（lib/addressPins.js）で
+ *                                          画像上の位置 { x, y } に直して渡す．位置は目安になる
+ * 置いたあとは，どちらもドラッグで調整できる．
  * 見つからない・画像の範囲外になるときは理由を出し，「地図をクリックして置く」へ切り替えられる．
  */
-export default function AddressPinPlacer({ transform, onPlace, onClickInstead, onClose }) {
+export default function AddressPinPlacer({ transform = null, onPlace, onClickInstead, onClose }) {
   const [outsideTitle, setOutsideTitle] = useState("");
 
   function handleSelect(result) {
+    if (!transform) {
+      onPlace({ lat: result.lat, lng: result.lng });
+      return;
+    }
     const position = placeOnImage(transform, result);
     if (!position.inside) {
       setOutsideTitle(result.title);
@@ -43,7 +50,9 @@ export default function AddressPinPlacer({ transform, onPlace, onClickInstead, o
         </button>
       </div>
       <p className="text-xs leading-relaxed text-sub">
-        お店のページなどからコピーした住所を貼り付けてください。マップの目印から計算した位置に仮のピンを置きます。位置は目安なので、ドラッグで調整してから保存してください。
+        {transform
+          ? "お店のページなどからコピーした住所を貼り付けてください。マップの目印から計算した位置に仮のピンを置きます。位置は目安なので、ドラッグで調整してから保存してください。"
+          : "お店のページなどからコピーした住所を貼り付けてください。その住所の場所に仮のピンを置きます。ずれていたら、ドラッグで調整してから保存してください。"}
       </p>
       <AddressSearchField
         label="ピンを置く住所"

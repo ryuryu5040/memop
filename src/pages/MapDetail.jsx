@@ -140,9 +140,12 @@ export default function MapDetail({ currentUser, isAdmin }) {
   const [isPinListOpen, setIsPinListOpen] = useState(false);
   const canEditMap = canManageContent(map, currentUser?.id, isAdmin);
   const currentVisibility = getMapVisibility(map);
-  // 「住所から置く」が使えるか（画像のマップで，有効にしてあり，目印から位置を計算できるとき．#25）
-  const addressPinSetup = map && !isTileMap(map) ? getAddressPinSetup(map) : { ok: false };
-  const canPlaceByAddress = Boolean(currentUser) && addressPinSetup.ok && !landmarkSettings;
+  // 「住所から置く」が使えるか（#25）．
+  //   地図のマップ … 位置を緯度経度で持つので，設定なしでいつでも使える
+  //   画像のマップ … 有効にしてあり，目印から位置を計算できるときだけ
+  const isTileMapOpen = Boolean(map) && isTileMap(map);
+  const addressPinSetup = map && !isTileMapOpen ? getAddressPinSetup(map) : { ok: false };
+  const canPlaceByAddress = Boolean(currentUser) && (isTileMapOpen || addressPinSetup.ok) && !landmarkSettings;
   // 設定のメニューは，画像のマップの作成者・管理者に，SQL を適用済みのときだけ出す
   const canEditAddressPins = canEditMap && map && !isTileMap(map) && hasAddressPinColumns(map);
 
@@ -750,15 +753,17 @@ export default function MapDetail({ currentUser, isAdmin }) {
     setSelectedPin({ ...position, draftId: nextDraftIdRef.current++ });
   }
 
-  /** 追加前の仮のピンをドラッグで動かした（画像のマップだけ） */
-  function handlePendingPinMove(x, y) {
-    setSelectedPin((pin) => (pin && !pin.id ? { ...pin, x, y } : pin));
+  /** 追加前の仮のピンをドラッグで動かした．position は { x, y } か { lat, lng } */
+  function handlePendingPinMove(position) {
+    setSelectedPin((pin) => (pin && !pin.id ? { ...pin, ...position } : pin));
   }
 
-  /** 「住所から置く」で計算した位置に，仮のピンを置く */
+  /** 「住所から置く」で求めた位置に，仮のピンを置く */
   async function handlePlaceByAddress(position) {
     await handleMapClick(position);
-    showToast("住所から計算した位置に置きました。位置は目安なので、ピンをドラッグして調整できます。");
+    showToast(isTileMapOpen
+      ? "住所の場所に置きました。ずれていたら、ピンをドラッグして調整できます。"
+      : "住所から計算した位置に置きました。位置は目安なので、ピンをドラッグして調整できます。");
   }
 
   /** 「住所から置く」をやめて，地図のクリックで置く */
@@ -1525,7 +1530,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
             </button>
 
             <div className="flex items-start gap-2">
-              {/* 住所からピンを置く（#25）．有効にしてあるマップで，ログインしているときだけ出す */}
+              {/* 住所からピンを置く（#25）．地図のマップと，有効にしてある画像のマップで，ログインしているときだけ出す */}
               {canPlaceByAddress && (
                 <button
                   type="button"
@@ -1565,7 +1570,8 @@ export default function MapDetail({ currentUser, isAdmin }) {
           {canPlaceByAddress && addressPlacerOpen && !selectedPin && (
             <div className="pointer-events-none absolute inset-x-3 top-16 z-30 flex justify-end sm:top-14">
               <AddressPinPlacer
-                transform={addressPinSetup}
+                // 地図のマップは変換しない（緯度経度をそのまま使う）ので渡さない
+                transform={isTileMapOpen ? null : addressPinSetup}
                 onPlace={handlePlaceByAddress}
                 onClickInstead={handlePlaceByClickInstead}
                 onClose={() => setAddressPlacerOpen(false)}
@@ -1830,6 +1836,8 @@ export default function MapDetail({ currentUser, isAdmin }) {
                   onMapClick={isEditingPin || !currentUser ? undefined : handleMapClick}
                   movablePinId={isEditingPin ? selectedPin?.id : null}
                   onPinMove={handleMovePin}
+                  // 追加前の仮のピンは，ドラッグで位置を調整できる（住所から置いたときの微調整など．#25）
+                  onPendingPinMove={handlePendingPinMove}
                   dense={Boolean(selectedPin)}
                 />
               </Suspense>
@@ -1856,7 +1864,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
               movablePinId={isEditingPin ? selectedPin?.id : null}
               onPinMove={(x, y) => handleMovePin({ x, y })}
               // 追加前の仮のピンは，ドラッグで位置を調整できる（住所から置いたときの微調整など．#25）
-              onPendingPinMove={handlePendingPinMove}
+              onPendingPinMove={(x, y) => handlePendingPinMove({ x, y })}
               // 「住所からピンを置く設定」を開いている間は，目印（と，いま選んでいる点）を表示する
               landmarks={landmarkSettings
                 ? [...landmarkSettings.landmarks, ...(landmarkSettings.point ? [landmarkSettings.point] : [])]
