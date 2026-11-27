@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
-import { parseAddressSearchResults } from "../src/lib/addressSearch.js";
+import { parseAddressSearchResults, removePostalCode } from "../src/lib/addressSearch.js";
 import {
   getMapInitialView,
   isSamePinPosition,
@@ -152,4 +152,19 @@ test("住所検索の結果から，名前と緯度経度を取り出す（座�
   ]);
   assert.deepEqual(results, [{ title: "東京都江東区豊洲", lat: 35.66, lng: 139.79 }]);
   assert.deepEqual(parseAddressSearchResults(null), []);
+});
+
+test("住所の頭の郵便番号は，検索の前に取り除く（番地の数字は残す）", () => {
+  const address = "東京都江東区豊洲3-2-20";
+  assert.equal(removePostalCode(`〒135-0061 ${address}`), address);
+  assert.equal(removePostalCode(`〒135-0061${address}`), address);
+  assert.equal(removePostalCode(`〒１３５－００６１　${address}`), address);
+  assert.equal(removePostalCode(`〒1350061 ${address}`), address);
+  assert.equal(removePostalCode(`135-0061 ${address}`), address);
+  // 郵便番号が無ければそのまま
+  assert.equal(removePostalCode(address), address);
+  assert.equal(removePostalCode("  豊洲  "), "豊洲");
+  // 頭が郵便番号の形でなければ消さない（桁が多い・番地の途中など）
+  assert.equal(removePostalCode("12345678 番地"), "12345678 番地");
+  assert.equal(removePostalCode("〒135-0061"), "");
 });
