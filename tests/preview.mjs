@@ -62,6 +62,16 @@ for (const [title,lat,lng,pinType,category,subcategory] of [
   await db.query("insert into public.pins(map_id,user_id,title,x,y,lat,lng,pin_type,category,subcategory) values ($1,$2,$3,null,null,$4,$5,$6,$7,$8)",[tileMap,owner,title,lat,lng,pinType,category,subcategory]);
 }
 
+// 住所からピンを置く（#25）．「豊洲ランチ」の画像を，豊洲駅のまわり（北が上）の地図に見立てて目印を登録し，有効にしておく．
+// 画像の左上が (35.6600, 139.7880)，右下が (35.6480, 139.8040) のつもり．
+// 「カフェめぐり」は目印なしのまま．設定パネルから目印の登録を試せる．
+await db.exec(await load("../supabase/migrations/20261128000000_address_pins.sql"));
+const toImage=(lat,lng)=>({x:(lng-139.7880)/0.016,y:(35.6600-lat)/0.012});
+await db.query("update public.maps set address_pin_enabled=true, address_landmarks=$2::jsonb where id=$1",[mapA,JSON.stringify([
+  {...toImage(35.6588,139.7900),lat:35.6588,lng:139.7900,label:"左上の交差点"},
+  {...toImage(35.6500,139.8020),lat:35.6500,lng:139.8020,label:"右下の交差点"},
+])]);
+
 // ポートは環境変数で変えられる（すでに別の確認用サーバーが動いているときに使う）．
 const uiPort=Number(process.env.PREVIEW_UI_PORT??4179);
 const apiPort=Number(process.env.PREVIEW_API_PORT??55439);
