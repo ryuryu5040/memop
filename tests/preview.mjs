@@ -72,6 +72,13 @@ await db.query("update public.maps set address_pin_enabled=true, address_landmar
   {...toImage(35.6500,139.8020),lat:35.6500,lng:139.8020,label:"右下の交差点"},
 ])]);
 
+// ピンの星評価（#47）．「豊洲ランチ」と「豊洲さんぽ（地図）」で評価をオンにし，作成者の架空の評価を入れておく．
+// 「カフェめぐり」はオフのまま．作成者でログインすると「…」メニューからオン・オフを試せる．
+// 閲覧ユーザーでログインすると，自分の評価を付け・変え・取り消せる（平均と件数が変わる）．
+await db.exec(await load("../supabase/migrations/20261129000000_pin_ratings.sql"));
+await db.query("update public.maps set rating_enabled=true where id in ($1,$2)",[mapA,tileMap]);
+await db.query("insert into public.pin_ratings(pin_id,user_id,rating) select id,$1,4.5 from public.pins where map_id in ($2,$3) and title in ('駅前のラーメン屋','豊洲駅')",[owner,mapA,tileMap]);
+
 // ポートは環境変数で変えられる（すでに別の確認用サーバーが動いているときに使う）．
 const uiPort=Number(process.env.PREVIEW_UI_PORT??4179);
 const apiPort=Number(process.env.PREVIEW_API_PORT??55439);
@@ -95,7 +102,7 @@ function getUserId(req) {
   catch { return null; }
 }
 function user(id) { return {id,aud:"authenticated",email:id===owner?"owner@example.test":"viewer@example.test",app_metadata:{provider:"email"},user_metadata:{},created_at:new Date().toISOString()}; }
-const tables=new Set(["maps","pins","pin_comments","saved_maps","folders","saved_folders"]);
+const tables=new Set(["maps","pins","pin_comments","saved_maps","folders","saved_folders","pin_ratings"]);
 const ident=(value)=>{if(!/^[a-z_]+$/.test(value))throw Error("invalid column");return '"'+value+'"';};
 
 const api=http.createServer(async (req,res)=>{
