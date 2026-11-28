@@ -9,7 +9,7 @@
         { "key": "X-Frame-Options", "value": "DENY" },
         {
           "key": "Content-Security-Policy-Report-Only",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self' https://ivaqsjybzkprabuzgaor.supabase.co wss://ivaqsjybzkprabuzgaor.supabase.co https://fxkiivksfqdagijlvnpk.supabase.co wss://fxkiivksfqdagijlvnpk.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://cyberjapandata.gsi.go.jp; font-src 'self'; connect-src 'self' https://ivaqsjybzkprabuzgaor.supabase.co wss://ivaqsjybzkprabuzgaor.supabase.co https://fxkiivksfqdagijlvnpk.supabase.co wss://fxkiivksfqdagijlvnpk.supabase.co https://msearch.gsi.go.jp; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         }
       ]
     }
