@@ -40,6 +40,7 @@ export default function TileMapView({
   onPinDoubleClick,
   movablePinId,
   onPinMove,
+  onPendingPinMove,
   dense = false,
 }) {
   const containerRef = useRef(null);
@@ -49,7 +50,7 @@ export default function TileMapView({
 
   // Leaflet のイベントは一度だけ登録するので，その中から最新の関数・値を読めるよう ref に入れておく
   const callbacksRef = useRef({});
-  callbacksRef.current = { onPinClick, onMapClick, onPinDoubleClick, onPinMove, movablePinId };
+  callbacksRef.current = { onPinClick, onMapClick, onPinDoubleClick, onPinMove, onPendingPinMove, movablePinId };
 
   // ピンごとの Leaflet のマーカーと，React で中身を描き込む <div>．鍵はピンの id（追加中の仮のピンは PENDING_KEY）
   const markersRef = useRef(new Map());
@@ -170,19 +171,31 @@ export default function TileMapView({
       elementsRef.current.delete(id);
     }
 
-    // 追加しようとしている場所の仮のピン（押しても何も起きない）
+    // 追加しようとしている場所の仮のピン．
+    // ドラッグで位置を調整できる（住所から置いたときの微調整など．#25）．押しても何も起きない．
     const pendingEntry = markers.get(PENDING_KEY);
     if (pendingPin?.lat != null && pendingPin?.lng != null) {
       if (pendingEntry) {
-        pendingEntry.marker.setLatLng([pendingPin.lat, pendingPin.lng]);
+        // ドラッグ中は，指やマウスの位置を優先する（既存ピンと同じ理由）
+        if (!pendingEntry.dragging) pendingEntry.marker.setLatLng([pendingPin.lat, pendingPin.lng]);
       } else {
         const marker = L.marker([pendingPin.lat, pendingPin.lng], {
           icon: L.divIcon({ html: markerElement(PENDING_KEY), className: "memop-tile-pin", iconSize: [0, 0], iconAnchor: [0, 0] }),
-          interactive: false,
+          // Leaflet はドラッグを「押せるマーカー」にしか付けないので interactive にする
+          interactive: true,
+          draggable: true,
           keyboard: false,
           zIndexOffset: 2000,
         }).addTo(leafletMap);
-        markers.set(PENDING_KEY, { marker });
+        const entry = { marker, dragging: false };
+        function reportMove() {
+          const { lat, lng } = marker.getLatLng().wrap();
+          callbacksRef.current.onPendingPinMove?.({ lat, lng });
+        }
+        marker.on("dragstart", () => { entry.dragging = true; });
+        marker.on("drag", reportMove);
+        marker.on("dragend", () => { entry.dragging = false; reportMove(); });
+        markers.set(PENDING_KEY, entry);
       }
     } else if (pendingEntry) {
       pendingEntry.marker.remove();
@@ -197,8 +210,10 @@ export default function TileMapView({
   const focusTarget = pendingPin ?? (selectedPinId != null ? pins.find((pin) => pin.id === selectedPinId) ?? null : null);
   const focusTargetRef = useRef(focusTarget);
   focusTargetRef.current = focusTarget;
-  // 既存ピンをドラッグで動かしている間は追いかけない（id だけを鍵にする）
-  const focusKey = !focusTarget ? null : focusTarget.id ?? `new:${focusTarget.lat}:${focusTarget.lng}`;
+  // ピンをドラッグで動かしている間は追いかけない（位置ではなく id・draftId を鍵にする）
+  const focusKey = !focusTarget
+    ? null
+    : focusTarget.id ?? (focusTarget.draftId != null ? `draft:${focusTarget.draftId}` : `new:${focusTarget.lat}:${focusTarget.lng}`);
 
   useEffect(() => {
     const leafletMap = leafletMapRef.current;
@@ -208,6 +223,11 @@ export default function TileMapView({
       const target = focusTargetRef.current;
       if (target?.lat == null || target?.lng == null) return;
       leafletMap.invalidateSize();
+      // 画面の外にある（住所から置いたときなど）ときは，まず真ん中に持ってくる．
+      // panInside だけだと最小限しか動かさないので，ピンが画面の端ぎりぎりに来てしまう．
+      if (!leafletMap.getBounds().contains([target.lat, target.lng])) {
+        leafletMap.setView([target.lat, target.lng], leafletMap.getZoom(), { animate: false });
+      }
       const panelOverlapsMap = dense && window.matchMedia(WIDE_SCREEN_QUERY).matches;
       leafletMap.panInside([target.lat, target.lng], {
         paddingTopLeft: REVEAL_PADDING_TOP_LEFT,
@@ -282,7 +302,7 @@ export default function TileMapView({
         );
       })}
       {ready && pendingPin?.lat != null && createPortal(
-        <span className="absolute left-0 top-0 block -translate-x-1/2 -translate-y-full animate-pulse motion-reduce:animate-none">
+        <span className={`absolute left-0 top-0 block -translate-x-1/2 -translate-y-full animate-pulse motion-reduce:animate-none ${onPendingPinMove ? "cursor-grab active:cursor-grabbing" : ""}`}>
           <PendingPinMarker pin={pendingPin} />
         </span>,
         markerElement(PENDING_KEY),

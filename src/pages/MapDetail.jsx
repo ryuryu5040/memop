@@ -35,6 +35,17 @@ import HomeLink from "../components/HomeLink.jsx";
 import Breadcrumb from "../components/Breadcrumb.jsx";
 import AuthButton from "../components/AuthButton.jsx";
 import { showToast } from "../lib/toast.js";
+import AddressPinSettingsPanel from "../components/AddressPinSettingsPanel.jsx";
+import AddressPinPlacer from "../components/AddressPinPlacer.jsx";
+import {
+  ADDRESS_PIN_UNAVAILABLE_MESSAGE,
+  fitLandmarkTransform,
+  getAddressPinSetup,
+  getMapLandmarks,
+  hasAddressPinColumns,
+  isAddressPinColumnMissingError,
+  landmarksForSave,
+} from "../lib/addressPins.js";
 
 const MAP_BUTTON_FILTER = "kind:button";
 
@@ -93,6 +104,18 @@ export default function MapDetail({ currentUser, isAdmin }) {
   const [savingPin, setSavingPin] = useState(false);
   const [pinError, setPinError] = useState("");
 
+  // 新しいピンの下書きにつける番号．地図をクリックするたびに変わる．
+  // ピンのパネルはこの番号が変わったときだけ入力欄を空に戻す（ドラッグで動かしても消えない）．
+  const nextDraftIdRef = useRef(1);
+
+  // 「住所から置く」の検索カードを開いているか（#25）
+  const [addressPlacerOpen, setAddressPlacerOpen] = useState(false);
+  // 「住所からピンを置く設定」の下書き．null のときは設定パネルを出さない（#25）．
+  // { landmarks: [{ x, y, lat, lng, label }], enabled, point: 目印にするためにクリックした点 | null }
+  const [landmarkSettings, setLandmarkSettings] = useState(null);
+  const [savingLandmarks, setSavingLandmarks] = useState(false);
+  const [landmarkError, setLandmarkError] = useState("");
+
   // コピー状態を覚える
   const [copied, setCopied] = useState(false);
 
@@ -117,6 +140,14 @@ export default function MapDetail({ currentUser, isAdmin }) {
   const [isPinListOpen, setIsPinListOpen] = useState(false);
   const canEditMap = canManageContent(map, currentUser?.id, isAdmin);
   const currentVisibility = getMapVisibility(map);
+  // 「住所から置く」が使えるか（#25）．
+  //   地図のマップ … 位置を緯度経度で持つので，設定なしでいつでも使える
+  //   画像のマップ … 有効にしてあり，目印から位置を計算できるときだけ
+  const isTileMapOpen = Boolean(map) && isTileMap(map);
+  const addressPinSetup = map && !isTileMapOpen ? getAddressPinSetup(map) : { ok: false };
+  const canPlaceByAddress = Boolean(currentUser) && (isTileMapOpen || addressPinSetup.ok) && !landmarkSettings;
+  // 設定のメニューは，画像のマップの作成者・管理者に，SQL を適用済みのときだけ出す
+  const canEditAddressPins = canEditMap && map && !isTileMap(map) && hasAddressPinColumns(map);
 
   function handlePinListClick(pin) {
     setPinError("");
@@ -357,6 +388,8 @@ export default function MapDetail({ currentUser, isAdmin }) {
     setSearchQuery("");
     setIsEditingMap(false);
     setMapError("");
+    setAddressPlacerOpen(false);
+    setLandmarkSettings(null);
     // 表示フィルタは前のマップの設定を持ち越さない．
     // 持ち越すと，「すべてオフ」等にした状態で別マップを開いたときに
     // ピンが1つも表示されず，原因も分からないまま操作不能に見えてしまう．
@@ -697,7 +730,14 @@ export default function MapDetail({ currentUser, isAdmin }) {
    * position は，画像のマップなら { x, y }，地図のマップなら { lat, lng }．
    */
   async function handleMapClick(position) {
+    // 「住所からピンを置く設定」を開いているときは，ピンではなく目印にする点を選ぶ
+    if (landmarkSettings) {
+      setLandmarkSettings((current) => current && { ...current, point: { x: position.x, y: position.y } });
+      return;
+    }
+
     setPinError("");
+    setAddressPlacerOpen(false);
 
     // 現在ログインしているユーザーを確認する
     const {
@@ -710,11 +750,91 @@ export default function MapDetail({ currentUser, isAdmin }) {
       showToast("ピンを追加するにはログインしてください。", { tone: "error" });
       return;
     }
-    setSelectedPin({ ...position });
+    setSelectedPin({ ...position, draftId: nextDraftIdRef.current++ });
+  }
+
+  /** 追加前の仮のピンをドラッグで動かした．position は { x, y } か { lat, lng } */
+  function handlePendingPinMove(position) {
+    setSelectedPin((pin) => (pin && !pin.id ? { ...pin, ...position } : pin));
+  }
+
+  /** 「住所から置く」で求めた位置に，仮のピンを置く */
+  async function handlePlaceByAddress(position) {
+    await handleMapClick(position);
+    showToast(isTileMapOpen
+      ? "住所の場所に置きました。ずれていたら、ピンをドラッグして調整できます。"
+      : "住所から計算した位置に置きました。位置は目安なので、ピンをドラッグして調整できます。");
+  }
+
+  /** 「住所から置く」をやめて，地図のクリックで置く */
+  function handlePlaceByClickInstead() {
+    setAddressPlacerOpen(false);
+    showToast("地図の置きたい場所をクリックしてください。");
+  }
+
+  function openLandmarkSettings() {
+    setSelectedPin(null);
+    setIsEditingPin(false);
+    setAddressPlacerOpen(false);
+    setLandmarkError("");
+    setLandmarkSettings({
+      landmarks: getMapLandmarks(map),
+      enabled: Boolean(map.address_pin_enabled),
+      point: null,
+    });
+  }
+
+  function closeLandmarkSettings() {
+    setLandmarkSettings(null);
+    setLandmarkError("");
+  }
+
+  /** 目印と有効・無効を保存する．maps の更新なので，作成者と管理者だけができる（RLS） */
+  async function handleSaveLandmarks() {
+    if (!landmarkSettings || savingLandmarks) return;
+    if (!canEditMap) {
+      setLandmarkError("このマップの設定は変更できません。");
+      return;
+    }
+    // 目印が足りないなど，計算できない状態では有効にしない
+    const enabled = landmarkSettings.enabled && fitLandmarkTransform(landmarkSettings.landmarks).ok;
+
+    setSavingLandmarks(true);
+    setLandmarkError("");
+    try {
+      const { data: updated, error: updateError } = await supabase
+        .from("maps")
+        .update({
+          address_landmarks: landmarksForSave(landmarkSettings.landmarks),
+          address_pin_enabled: enabled,
+        })
+        .eq("id", id)
+        .select()
+        .maybeSingle();
+
+      if (updateError || !updated) {
+        console.error("住所からピンを置く設定の保存に失敗", updateError);
+        setLandmarkError(isAddressPinColumnMissingError(updateError)
+          ? ADDRESS_PIN_UNAVAILABLE_MESSAGE
+          : `保存できませんでした。${updateError?.message ?? "このマップの設定を変更する権限がありません。"}`);
+        return;
+      }
+
+      setMap(updated);
+      setLandmarkSettings(null);
+      showToast(enabled ? "住所からピンを置けるようにしました。" : "設定を保存しました。");
+    } catch (e) {
+      console.error("住所からピンを置く設定の保存中に予期しないエラー", e);
+      setLandmarkError(`予期しないエラーが発生しました。${e?.message ?? e}`);
+    } finally {
+      setSavingLandmarks(false);
+    }
   }
 
   /** ピンをクリックしたら詳細パネルを開く */
   function handlePinClick(pin) {
+    // 「住所からピンを置く設定」の間は，ピンを開かない（設定パネルと重なるため）
+    if (landmarkSettings) return;
     setPinError("");
     setIsEditingPin(false);
     setSelectedPin(pin);
@@ -1328,6 +1448,18 @@ export default function MapDetail({ currentUser, isAdmin }) {
                     </MenuItem>
                   )}
 
+                  {canEditAddressPins && (
+                    <MenuItem
+                      icon="pin"
+                      onClick={() => {
+                        setMapMenuOpen(false);
+                        openLandmarkSettings();
+                      }}
+                    >
+                      住所からピンを置く設定
+                    </MenuItem>
+                  )}
+
                   {canEditMap && (
                     <MenuItem
                       icon="trash"
@@ -1382,6 +1514,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
               onClick={() => {
                 setFiltersOpen((current) => !current);
                 setIsPinListOpen(false);
+                setAddressPlacerOpen(false);
               }}
               aria-expanded={filtersOpen}
               aria-controls="map-filters"
@@ -1396,21 +1529,55 @@ export default function MapDetail({ currentUser, isAdmin }) {
               )}
             </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                setIsPinListOpen((open) => !open);
-                setFiltersOpen(false);
-              }}
-              aria-expanded={isPinListOpen}
-              aria-controls="map-pin-list"
-              className={`btn pointer-events-auto shadow-sm ${isPinListOpen ? "border-ink" : ""}`}
-            >
-              <Icon name="list" />
-              ピン
-              <span className="text-sub">{visiblePins.length}</span>
-            </button>
+            <div className="flex items-start gap-2">
+              {/* 住所からピンを置く（#25）．地図のマップと，有効にしてある画像のマップで，ログインしているときだけ出す */}
+              {canPlaceByAddress && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddressPlacerOpen((open) => !open);
+                    setFiltersOpen(false);
+                    setIsPinListOpen(false);
+                    setSelectedPin(null);
+                    setIsEditingPin(false);
+                  }}
+                  aria-expanded={addressPlacerOpen}
+                  className={`btn pointer-events-auto shadow-sm ${addressPlacerOpen ? "border-ink" : ""}`}
+                >
+                  <Icon name="search" />
+                  住所から置く
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPinListOpen((open) => !open);
+                  setFiltersOpen(false);
+                  setAddressPlacerOpen(false);
+                }}
+                aria-expanded={isPinListOpen}
+                aria-controls="map-pin-list"
+                className={`btn pointer-events-auto shadow-sm ${isPinListOpen ? "border-ink" : ""}`}
+              >
+                <Icon name="list" />
+                ピン
+                <span className="text-sub">{visiblePins.length}</span>
+              </button>
+            </div>
           </div>
+
+          {canPlaceByAddress && addressPlacerOpen && !selectedPin && (
+            <div className="pointer-events-none absolute inset-x-3 top-16 z-30 flex justify-end sm:top-14">
+              <AddressPinPlacer
+                // 地図のマップは変換しない（緯度経度をそのまま使う）ので渡さない
+                transform={isTileMapOpen ? null : addressPinSetup}
+                onPlace={handlePlaceByAddress}
+                onClickInstead={handlePlaceByClickInstead}
+                onClose={() => setAddressPlacerOpen(false)}
+              />
+            </div>
+          )}
 
           {filtersOpen && (
             <div
@@ -1669,6 +1836,8 @@ export default function MapDetail({ currentUser, isAdmin }) {
                   onMapClick={isEditingPin || !currentUser ? undefined : handleMapClick}
                   movablePinId={isEditingPin ? selectedPin?.id : null}
                   onPinMove={handleMovePin}
+                  // 追加前の仮のピンは，ドラッグで位置を調整できる（住所から置いたときの微調整など．#25）
+                  onPendingPinMove={handlePendingPinMove}
                   dense={Boolean(selectedPin)}
                 />
               </Suspense>
@@ -1694,13 +1863,30 @@ export default function MapDetail({ currentUser, isAdmin }) {
               onMapClick={isEditingPin || !currentUser ? undefined : (x, y) => handleMapClick({ x, y })}
               movablePinId={isEditingPin ? selectedPin?.id : null}
               onPinMove={(x, y) => handleMovePin({ x, y })}
-              dense={Boolean(selectedPin)}
+              // 追加前の仮のピンは，ドラッグで位置を調整できる（住所から置いたときの微調整など．#25）
+              onPendingPinMove={(x, y) => handlePendingPinMove({ x, y })}
+              // 「住所からピンを置く設定」を開いている間は，目印（と，いま選んでいる点）を表示する
+              landmarks={landmarkSettings
+                ? [...landmarkSettings.landmarks, ...(landmarkSettings.point ? [landmarkSettings.point] : [])]
+                : []}
+              dense={Boolean(selectedPin || landmarkSettings)}
             />
             )}
           </div>
         </div>
 
-        {selectedPin && (
+        {landmarkSettings && (
+          <AddressPinSettingsPanel
+            settings={landmarkSettings}
+            onChange={setLandmarkSettings}
+            onSave={handleSaveLandmarks}
+            onClose={closeLandmarkSettings}
+            saving={savingLandmarks}
+            error={landmarkError}
+          />
+        )}
+
+        {selectedPin && !landmarkSettings && (
           <PinPanel
             pin={selectedPin}
             focusedCommentId={String(selectedPin.id) === requestedPinId ? requestedCommentId : null}

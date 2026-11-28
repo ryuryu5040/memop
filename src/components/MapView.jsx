@@ -15,6 +15,8 @@ import { scrollBehavior } from "../lib/motion.js";
  *   selectedPinId 詳細パネルで開いているピンの id．そのピンを強調表示する（未選択なら null）
  *   onPinClick ピンがクリックされたときに呼ぶ．引数はそのピン
  *   onMapClick 画像の何もない場所がクリックされたときに呼ぶ．引数は x と y（どちらも0〜1）
+ *   onPendingPinMove 渡すと，追加前の仮のピンをドラッグで動かせる．引数は x と y
+ *   landmarks  「住所からピンを置く」の目印．[{ x, y }]．番号付きの丸で表示する（#25）
  *   dense      スマホでピンのパネルが開いているなど，地図の領域が狭いとき true．余白と拡大ボタンを省く（拡大はピンチでできる）
  *
  * 座標について：
@@ -24,7 +26,7 @@ import { scrollBehavior } from "../lib/motion.js";
  */
 
 
-export function MapView({ map, pins = [], pendingPin = null, selectedPinId = null, onPinClick, onMapClick, onPinDoubleClick, movablePinId, onPinMove, dense = false, }) {
+export function MapView({ map, pins = [], pendingPin = null, selectedPinId = null, onPinClick, onMapClick, onPinDoubleClick, movablePinId, onPinMove, onPendingPinMove, landmarks = [], dense = false, }) {
   const { src: imageSrc, loading: imageLoading } = useMapImage(map?.image_url);
 
   // 拡大率（scale）、最大拡大率（maxScale）のStateを管理
@@ -51,6 +53,8 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
   const suppressClickRef = useRef(false);
   const moveFrameRef = useRef(null);
   const pendingMoveRef = useRef(null);
+  // ドラッグ中の位置を渡す先（既存のピンなら onPinMove，仮のピンなら onPendingPinMove）
+  const dragMoveRef = useRef(null);
 
   // ホイールで拡大・縮小するときに使う値（#19）
   // ホイール操作中は追いかけるアニメーションを切り，ポインターの下の地点がずれないようにする
@@ -349,10 +353,11 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
       : null);
   const focusTargetRef = useRef(focusTarget);
   focusTargetRef.current = focusTarget;
-  // 既存ピンをドラッグで動かしている間は追いかけない（id だけを鍵にする）
+  // ピンをドラッグで動かしている間は追いかけない（id だけを鍵にする）．
+  // 追加前の仮のピンは draftId（置き直すたびに変わる番号．MapDetail.jsx）を鍵にする．
   const focusKey = !focusTarget
     ? null
-    : focusTarget.id ?? `new:${focusTarget.x}:${focusTarget.y}`;
+    : focusTarget.id ?? focusTarget.draftId ?? `new:${focusTarget.x}:${focusTarget.y}`;
   const hasImage = Boolean(imageSrc);
 
   useEffect(() => {
@@ -468,8 +473,19 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
     onMapClick(clamp(x), clamp(y));
   }
 
-  function handlePinPointerMove(event, pin) {
-    if (movablePinId !== pin.id) return;
+  /** ドラッグを始める（押した指・マウスを，離すまでこの要素が受け取り続けるようにする） */
+  function startDrag(event, onMove) {
+    event.preventDefault();
+    event.stopPropagation();
+    dragMoveRef.current = onMove;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  /**
+   * ドラッグ中の位置を「画像に対する割合」に直して渡す．
+   * 既存のピンの位置の編集と，追加前の仮のピンの両方で使う．渡す先は startDrag で決めた関数．
+   */
+  function handleDragPointerMove(event) {
     if (event.buttons !== 1) return;
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     if (!mapAreaRef.current) return;
@@ -493,12 +509,12 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
       pendingMoveRef.current = null;
 
       if (position) {
-        onPinMove?.(position.x, position.y);
+        dragMoveRef.current?.(position.x, position.y);
       }
     });
   }
 
-  function finishPinDrag(event) {
+  function finishDrag(event) {
     if (moveFrameRef.current !== null) {
       cancelAnimationFrame(moveFrameRef.current);
       moveFrameRef.current = null;
@@ -509,8 +525,9 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
 
     // 最後の位置を確実に反映するためもう一度反映
     if (position) {
-      onPinMove?.(position.x, position.y);
+      dragMoveRef.current?.(position.x, position.y);
     }
+    dragMoveRef.current = null;
 
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -556,7 +573,9 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
       // スマホでピンのパネルが開いている間（dense）は地図の領域が狭いので，余白を詰める．
       // overscroll-contain：地図を端まで動かしたとき，ページ全体が引っ張られたり，
       // 下に引いて再読み込みが始まったりしないようにする．
-      className={`h-full w-full min-w-0 max-w-full overflow-auto overscroll-contain px-3 pb-16 pt-16 sm:px-4 ${dense ? "max-sm:pb-3 max-sm:pt-3" : ""} ${isPanning ? "cursor-grabbing select-none [&_*]:cursor-grabbing" : ""}`}
+      // 広い画面でパネルを開いている間（dense）は，右下に浮かぶパネル（幅 20rem＋余白）の分だけ右を空け，
+      // 画像とピンがパネルの裏に隠れないようにする（住所から置いた仮のピンをドラッグで調整できるように．#25）．
+      className={`h-full w-full min-w-0 max-w-full overflow-auto overscroll-contain px-3 pb-16 pt-16 sm:px-4 ${dense ? "max-sm:pb-3 max-sm:pt-3 sm:pr-[22rem]" : ""} ${isPanning ? "cursor-grabbing select-none [&_*]:cursor-grabbing" : ""}`}
     >
       {/* 
         中央寄せ・スクロール見切れ防止用コンテナ
@@ -642,14 +661,11 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
               }}
               onPointerDown={(event) => {
                 if (movablePinId !== pin.id) return;
-
-                event.preventDefault();
-                event.stopPropagation();
-                event.currentTarget.setPointerCapture(event.pointerId);
+                startDrag(event, onPinMove);
               }}
-              onPointerMove={(event) => handlePinPointerMove(event, pin)}
-              onPointerUp={finishPinDrag}
-              onPointerCancel={finishPinDrag}
+              onPointerMove={handleDragPointerMove}
+              onPointerUp={finishDrag}
+              onPointerCancel={finishDrag}
               // 位置を編集中の目印．このピンの上で始めたドラッグでは地図を動かさない（handleMapMouseDown）
               data-pin-movable={movablePinId === pin.id ? "" : undefined}
               style={{
@@ -671,15 +687,38 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
             );
           })}
 
-          {/* 新しいピンの追加予定位置 */}
+          {/* 「住所からピンを置く」の目印．番号は設定パネルの一覧と同じ順 */}
+          {landmarks.map((landmark, index) => (
+            <span
+              key={index}
+              aria-hidden="true"
+              style={{ left: `${landmark.x * 100}%`, top: `${landmark.y * 100}%` }}
+              className="pointer-events-none absolute z-20 flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-accent text-xs font-bold text-white shadow-md ring-2 ring-white"
+            >
+              {index + 1}
+            </span>
+          ))}
+
+          {/*
+            新しいピンの追加予定位置．
+            onPendingPinMove を渡されたときは，ドラッグで位置を調整できる（data-pin-movable で地図は動かさない）．
+          */}
           {pendingPin && (
             <div
               aria-hidden="true"
+              data-pin-movable={onPendingPinMove ? "" : undefined}
+              onPointerDown={onPendingPinMove ? (event) => startDrag(event, onPendingPinMove) : undefined}
+              onPointerMove={onPendingPinMove ? handleDragPointerMove : undefined}
+              onPointerUp={onPendingPinMove ? finishDrag : undefined}
+              onPointerCancel={onPendingPinMove ? finishDrag : undefined}
               style={{
                 left: `${pendingPin.x * 100}%`,
                 top: `${pendingPin.y * 100}%`,
               }}
-              className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full animate-pulse motion-reduce:animate-none"
+              className={`absolute z-10 -translate-x-1/2 -translate-y-full animate-pulse motion-reduce:animate-none ${onPendingPinMove
+                ? "touch-none cursor-grab active:cursor-grabbing"
+                : "pointer-events-none"
+                }`}
             >
               <PendingPinMarker pin={pendingPin} />
             </div>

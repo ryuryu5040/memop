@@ -112,10 +112,10 @@ export function PinPanel({
   const [customPinType, setCustomPinType] = useState("");
 
   // 別のピンを選び直したときに入力欄を作り直す．
-  // pin.id が無い（新規作成）ときは座標を鍵にして，
+  // pin.id が無い（新規作成）ときは draftId（地図をクリックするたびに変わる番号．MapDetail.jsx）を鍵にして，
   // 別の場所をクリックしたら空の状態に戻るようにする．
-  // 地図のマップ（lib/tileMaps.js）では x, y の代わりに緯度経度（lat, lng）で位置を持つので，両方を鍵に入れる．
-  const key = pin?.id ?? `${pin?.x}-${pin?.y}-${pin?.lat}-${pin?.lng}`;
+  // 座標を鍵にしないのは，仮のピンをドラッグで動かしたときに入力中の内容が消えないようにするため（#25）．
+  const key = pin?.id ?? pin?.draftId ?? `${pin?.x}-${pin?.y}-${pin?.lat}-${pin?.lng}`;
 
   const [panelCollapsed, setPanelCollapsed] = useState(false);
 
