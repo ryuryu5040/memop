@@ -46,6 +46,17 @@ import {
   isAddressPinColumnMissingError,
   landmarksForSave,
 } from "../lib/addressPins.js";
+import {
+  PIN_RATING_UNAVAILABLE_MESSAGE,
+  canRatePin,
+  chunkIds,
+  formatRatingAverage,
+  isPinRatingUnavailableError,
+  isRatingEnabled,
+  isValidRating,
+  mergePinUpdate,
+  saveMyRating,
+} from "../lib/pinRatings.js";
 
 const MAP_BUTTON_FILTER = "kind:button";
 
@@ -148,6 +159,25 @@ export default function MapDetail({ currentUser, isAdmin }) {
   const canPlaceByAddress = Boolean(currentUser) && (isTileMapOpen || addressPinSetup.ok) && !landmarkSettings;
   // 設定のメニューは，画像のマップの作成者・管理者に，SQL を適用済みのときだけ出す
   const canEditAddressPins = canEditMap && map && !isTileMap(map) && hasAddressPinColumns(map);
+  // ピンの星評価（#47）．評価機能のオン・オフは，作成者・管理者に，SQL を適用済みのときだけ出す
+  const ratingEnabled = isRatingEnabled(map);
+  const canEditRatings = Boolean(canEditMap && map && "rating_enabled" in map);
+  // 自分が付けた評価（ピンの id → 点数）．ほかの人の評価は DB から読めないので，ここには自分の分だけが入る
+  const [myRatings, setMyRatings] = useState(() => new Map());
+  const [ratingSavingPinId, setRatingSavingPinId] = useState(null);
+  const [savingRatingSetting, setSavingRatingSetting] = useState(false);
+  // 自分で評価を保存した回数．読み込み中に保存したら，その読み込み結果は古いので捨てて読み直す
+  const ratingWriteCountRef = useRef(0);
+  const [ratingsReloadToken, setRatingsReloadToken] = useState(0);
+  // 自分の評価を読み込む対象のピン．評価の合計が変わるたびに読み直さないよう，id の並びだけで判断する
+  const ratablePinIds = ratingEnabled && currentUserId
+    ? pins.filter((pin) => pin.kind !== "button").map((pin) => pin.id).join(",")
+    : "";
+  /** 地図のピンにマウスを重ねたときの吹き出し．評価がオンで評価があれば「タイトル ⭐4.5」 */
+  const pinHoverLabel = useCallback((pin) => {
+    const average = ratingEnabled && pin.kind !== "button" ? formatRatingAverage(pin) : null;
+    return average ? `${pin.title} ⭐${average}` : pin.title;
+  }, [ratingEnabled]);
 
   function handlePinListClick(pin) {
     setPinError("");
@@ -694,8 +724,10 @@ export default function MapDetail({ currentUser, isAdmin }) {
                 : [...current, payload.new],
             );
           } else if (payload.eventType === "UPDATE") {
+            // 評価（#47）が変わるたびに合計と件数だけが更新され，長いメモなどは送られてこないことがあるので，
+            // 届いた列だけを手元のピンに重ねる
             setPins((current) =>
-              current.map((p) => (p.id === payload.new.id ? payload.new : p)),
+              current.map((p) => (p.id === payload.new.id ? mergePinUpdate(p, payload.new) : p)),
             );
             // 今パネルで表示中のピンが他の人に書き換えられた場合，古い内容を
             // 表示し続けない．ただし自分が編集中のときは，入力途中の内容を
@@ -703,7 +735,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
             // 別問題として残るが，少なくとも見ている内容は最新化する）．
             setSelectedPin((current) =>
               current?.id === payload.new.id && !isEditingPinRef.current
-                ? payload.new
+                ? mergePinUpdate(current, payload.new)
                 : current,
             );
           } else if (payload.eventType === "DELETE") {
@@ -1032,7 +1064,115 @@ export default function MapDetail({ currentUser, isAdmin }) {
   }
 
   /** パネルの入力を pins テーブルに保存する */
-  async function handleSavePin({ title, content, pinType, category = null, subcategory = null, kind, linkMapId, tabelogUrl = null }) {
+  // 自分が付けた評価を読む（#47）．RLS により，自分の分だけが返る
+  useEffect(() => {
+    if (!ratablePinIds) return;
+    const controller = new AbortController();
+    const writeCountAtStart = ratingWriteCountRef.current;
+    (async () => {
+      // ピンが多いマップでも URL が長くなりすぎないよう，100件ずつ読む
+      const results = await Promise.all(chunkIds(ratablePinIds.split(","), 100).map((ids) =>
+        supabase.from("pin_ratings").select("pin_id, rating").in("pin_id", ids).abortSignal(controller.signal)));
+      if (controller.signal.aborted) return;
+      // 読み込んでいる間に自分で評価を保存していたら，この結果は古いので読み直す
+      if (ratingWriteCountRef.current !== writeCountAtStart) {
+        setRatingsReloadToken((token) => token + 1);
+        return;
+      }
+      const loadError = results.find((result) => result.error)?.error;
+      if (loadError) {
+        if (!isPinRatingUnavailableError(loadError)) console.error("自分の評価の読み込みに失敗", loadError);
+        setMyRatings(new Map());
+        return;
+      }
+      setMyRatings(new Map(results.flatMap((result) => result.data).map((row) => [row.pin_id, Number(row.rating)])));
+    })();
+    return () => controller.abort();
+  }, [ratablePinIds, ratingsReloadToken]);
+
+  /** ピンの合計と件数を読み直して，手元のピンに反映する（リアルタイムの反映を待たずに平均を更新する） */
+  async function refreshPinRatingTotals(pinId) {
+    const { data, error: refreshError } = await supabase
+      .from("pins")
+      .select("id, rating_sum, rating_count")
+      .eq("id", pinId)
+      .maybeSingle();
+    if (refreshError || !data) return;
+    const merge = (pin) => (pin?.id === pinId ? { ...pin, rating_sum: data.rating_sum, rating_count: data.rating_count } : pin);
+    setPins((current) => current.map(merge));
+    setSelectedPin((current) => merge(current));
+  }
+
+  /** 自分の評価を付ける・変える・取り消す（rating が null なら取り消す） */
+  async function handleRatePin(pinId, rating) {
+    if (!currentUserId || ratingSavingPinId) return;
+    if (rating !== null && !isValidRating(rating)) return;
+
+    setRatingSavingPinId(pinId);
+    setPinError("");
+    try {
+      // 手元の「自分の評価」が古くても失敗しないよう，変更→追加の順で試す（lib/pinRatings.js）
+      const { ok, error: saveError } = await saveMyRating(supabase, { pinId, userId: currentUserId, rating });
+      ratingWriteCountRef.current += 1;
+
+      if (!ok) {
+        console.error("評価の保存に失敗", saveError);
+        setPinError(isPinRatingUnavailableError(saveError)
+          ? PIN_RATING_UNAVAILABLE_MESSAGE
+          : "評価を保存できませんでした。評価機能がオフになったか、このピンを見られなくなった可能性があります。");
+        return;
+      }
+
+      setMyRatings((current) => {
+        const next = new Map(current);
+        if (rating === null) next.delete(pinId);
+        else next.set(pinId, rating);
+        return next;
+      });
+      await refreshPinRatingTotals(pinId);
+    } catch (e) {
+      console.error("評価の保存中に予期しないエラー", e);
+      setPinError(`予期しないエラーが発生しました．${e?.message ?? e}`);
+    } finally {
+      setRatingSavingPinId(null);
+    }
+  }
+
+  /** マップの評価機能をオン・オフする（作成者・管理者だけ） */
+  async function handleToggleRatingEnabled() {
+    if (!canEditRatings || savingRatingSetting) return;
+    const nextEnabled = !ratingEnabled;
+
+    setSavingRatingSetting(true);
+    try {
+      const { data: updated, error: updateError } = await supabase
+        .from("maps")
+        .update({ rating_enabled: nextEnabled })
+        .eq("id", id)
+        .select()
+        .maybeSingle();
+
+      if (updateError || !updated) {
+        console.error("評価機能の切り替えに失敗", updateError);
+        showToast(isPinRatingUnavailableError(updateError)
+          ? PIN_RATING_UNAVAILABLE_MESSAGE
+          : "評価機能を切り替えられませんでした。", { tone: "error" });
+        return;
+      }
+
+      setMap(updated);
+      showToast(nextEnabled
+        ? "このマップでピンの評価を使えるようにしました。"
+        : "このマップでピンの評価を使わないようにしました。これまでの評価は残ります。");
+    } catch (e) {
+      console.error("評価機能の切り替え中に予期しないエラー", e);
+      showToast(`予期しないエラーが発生しました。${e?.message ?? e}`, { tone: "error" });
+    } finally {
+      setSavingRatingSetting(false);
+    }
+  }
+
+  async function handleSavePin({ title, content, pinType, category = null, subcategory = null, kind, linkMapId, tabelogUrl = null, rating = null }) {
     if (savingPin || !selectedPin) return;
 
     setSavingPin(true);
@@ -1088,6 +1228,20 @@ export default function MapDetail({ currentUser, isAdmin }) {
           ? current
           : [...current, created],
       );
+
+      // 追加するときに付けた評価は，ピンができてから保存する（#47）．
+      // 評価だけ保存できなくても，ピンは残す．
+      if (rating !== null && canRatePin(map, created)) {
+        const { ok: ratingSaved, error: ratingError } = await saveMyRating(supabase, { pinId: created.id, userId: user.id, rating });
+        ratingWriteCountRef.current += 1;
+        if (!ratingSaved) {
+          console.error("追加したピンの評価の保存に失敗", ratingError);
+          showToast("ピンは保存しましたが、評価は保存できませんでした。", { tone: "error" });
+        } else {
+          setMyRatings((current) => new Map(current).set(created.id, rating));
+          await refreshPinRatingTotals(created.id);
+        }
+      }
       closePanel();
     } catch (e) {
       console.error("ピンの保存中に予期しないエラー", e);
@@ -1460,6 +1614,19 @@ export default function MapDetail({ currentUser, isAdmin }) {
                     </MenuItem>
                   )}
 
+                  {canEditRatings && (
+                    <MenuItem
+                      icon={ratingEnabled ? "close" : "check"}
+                      disabled={savingRatingSetting}
+                      onClick={() => {
+                        setMapMenuOpen(false);
+                        handleToggleRatingEnabled();
+                      }}
+                    >
+                      {ratingEnabled ? "ピンの評価を使わない" : "ピンの評価を使う"}
+                    </MenuItem>
+                  )}
+
                   {canEditMap && (
                     <MenuItem
                       icon="trash"
@@ -1798,9 +1965,12 @@ export default function MapDetail({ currentUser, isAdmin }) {
 
                         <span className="min-w-0 py-1">
                           <span className="block truncate">{pin.title}</span>
-                          {pin.kind !== "button" && formatPinCategory(pin) && (
+                          {pin.kind !== "button" && (formatPinCategory(pin) || (ratingEnabled && formatRatingAverage(pin))) && (
                             <span className="block truncate text-xs font-normal text-sub">
-                              {formatPinCategory(pin)}
+                              {[
+                                formatPinCategory(pin),
+                                ratingEnabled && formatRatingAverage(pin) ? `⭐${formatRatingAverage(pin)}` : null,
+                              ].filter(Boolean).join("　")}
                             </span>
                           )}
                         </span>
@@ -1825,6 +1995,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
                   key={map.id}
                   map={map}
                   pins={displayPins}
+              pinLabel={pinHoverLabel}
                   pendingPin={
                     selectedPin && !selectedPin.id
                       ? { ...selectedPin, ...pendingPinAppearance }
@@ -1848,6 +2019,7 @@ export default function MapDetail({ currentUser, isAdmin }) {
               key={map.id}
               map={map}
               pins={displayPins}
+              pinLabel={pinHoverLabel}
               pendingPin={
                 selectedPin && !selectedPin.id
                   ? { ...selectedPin, ...pendingPinAppearance }
@@ -1907,6 +2079,10 @@ export default function MapDetail({ currentUser, isAdmin }) {
             isEditing={isEditingPin}
             onEditStart={startEditingPin}
             onEditCancel={cancelEditingPin}
+            ratingEnabled={ratingEnabled}
+            myRating={ratingEnabled ? myRatings.get(selectedPin.id) ?? null : null}
+            onRate={(rating) => handleRatePin(selectedPin.id, rating)}
+            ratingSaving={ratingSavingPinId !== null && ratingSavingPinId === selectedPin.id}
           />
         )}
         {requestedPinMissing && (
