@@ -11,6 +11,8 @@ import AutoGrowTextarea from "./AutoGrowTextarea.jsx";
 import Icon from "./Icon.jsx";
 import { TABELOG_URL_MAX_LENGTH, isTabelogUrl, normalizeTabelogUrl } from "../lib/tabelogUrl.js";
 import { scrollBehavior } from "../lib/motion.js";
+import { formatRatingSummary } from "../lib/pinRatings.js";
+import { StarRatingInput } from "./StarRating.jsx";
 
 /**
  * ピンの入力・表示パネル．
@@ -65,6 +67,11 @@ export function PinPanel({
   isEditing,
   onEditStart,
   onEditCancel,
+  // ピンの星評価（#47）．ratingEnabled はマップの評価機能がオンか．myRating は自分の評価（なければ null）
+  ratingEnabled = false,
+  myRating = null,
+  onRate,
+  ratingSaving = false,
 }) {
   const isNew = !pin?.id;
   const currentUserId = currentUser?.id;
@@ -75,6 +82,8 @@ export function PinPanel({
   // 何の場所か（lib/pinCategories.js）．どちらも任意で，選ばないときは null
   const [category, setCategory] = useState(null);
   const [subcategory, setSubcategory] = useState(null);
+  // ピンを追加するときに付ける評価（任意，#47）
+  const [newRating, setNewRating] = useState(null);
   const selectedCategory = getPinCategory(category);
   // ピンの種類（メモ／ボタン）と，ボタンのときの移動先（#67）
   const [kind, setKind] = useState("pin");
@@ -134,6 +143,8 @@ export function PinPanel({
     setLinkMapId(pin?.link_map_id ?? "");
     setTabelogUrl(pin?.tabelog_url ?? "");
     resetCategory(pin?.category, pin?.subcategory);
+    // 別の場所に置き直したときなどに，前のピンで選んだ評価を持ち越さない（#47）
+    setNewRating(null);
     // 既存4種類に含まれない場合は自由入力として扱う
     const isCustomPinType =
       pin?.pin_type &&
@@ -416,6 +427,8 @@ export function PinPanel({
       kind,
       linkMapId: kind === "button" ? linkMapId : null,
       tabelogUrl: kind === "button" ? null : normalizedTabelogUrl,
+      // 評価は追加するときだけ一緒に送る．付けたあとの変更は，表示モードの星から行う
+      rating: isNew && ratingEnabled && kind !== "button" ? newRating : null,
     };
 
     // isNewか否かで呼び出す関数（onSave or onUpdate）切り替える
@@ -754,6 +767,31 @@ export function PinPanel({
                     )}
                   </div>
 
+                  {/* 追加するときの評価（任意，#47）．評価機能がオンのマップの，ボタンではないピンだけ */}
+                  {isNew && ratingEnabled && kind !== "button" && (
+                    <div>
+                      <p className="text-xs font-bold text-sub">評価（任意）</p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <StarRatingInput
+                          value={newRating}
+                          onChange={setNewRating}
+                          disabled={saving}
+                          label="このピンの評価"
+                        />
+                        {newRating !== null && (
+                          <button
+                            type="button"
+                            onClick={() => setNewRating(null)}
+                            disabled={saving}
+                            className="text-xs text-sub underline disabled:opacity-50"
+                          >
+                            付けない
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* 食べログの店舗ページ URL（任意，#5） */}
                   <div>
                     <label htmlFor="pin-tabelog-url" className="text-xs font-bold text-sub">
@@ -837,6 +875,39 @@ export function PinPanel({
                   {formatPinCategory(pin)}
                 </span>
               </p>
+            )}
+
+            {/* ピンの星評価（#47）．ほかの人に見えるのは平均と件数だけ */}
+            {ratingEnabled && pin.kind !== "button" && (
+              <div className="mb-3 space-y-1.5">
+                <p className="text-sm font-bold text-ink">
+                  <span className="sr-only">みんなの評価：</span>
+                  {formatRatingSummary(pin)}
+                </p>
+                {currentUserId ? (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-xs font-bold text-sub">あなたの評価</span>
+                    <StarRatingInput
+                      value={myRating}
+                      onChange={(rating) => onRate?.(rating)}
+                      disabled={ratingSaving}
+                      label="あなたの評価"
+                    />
+                    {myRating !== null && (
+                      <button
+                        type="button"
+                        onClick={() => onRate?.(null)}
+                        disabled={ratingSaving}
+                        className="text-xs text-sub underline disabled:opacity-50"
+                      >
+                        取り消し
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-sub">評価するにはログインしてください。</p>
+                )}
+              </div>
             )}
 
             {/* 通常はここに来ない．ボタンは押した瞬間に移動するので，

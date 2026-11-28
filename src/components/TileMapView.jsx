@@ -42,6 +42,8 @@ export default function TileMapView({
   onPinMove,
   onPendingPinMove,
   dense = false,
+  // ピンにマウスを重ねたときの吹き出し（画像のマップと同じ．マップ詳細では評価（#47）も足して渡す）
+  pinLabel = (pin) => pin.title,
 }) {
   const containerRef = useRef(null);
   const leafletMapRef = useRef(null);
@@ -290,6 +292,7 @@ export default function TileMapView({
         const movable = movablePinId === pin.id;
         return createPortal(
           <span
+            title={pinLabel(pin)}
             className={`memop-tile-pin-body absolute left-0 top-0 block origin-bottom -translate-x-1/2 -translate-y-full transition-transform ${isSelected ? "scale-125" : "hover:scale-125"} ${movable
               ? "cursor-grab animate-pulse opacity-70 active:cursor-grabbing motion-reduce:animate-none"
               : "cursor-pointer"

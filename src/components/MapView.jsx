@@ -26,7 +26,10 @@ import { scrollBehavior } from "../lib/motion.js";
  */
 
 
-export function MapView({ map, pins = [], pendingPin = null, selectedPinId = null, onPinClick, onMapClick, onPinDoubleClick, movablePinId, onPinMove, onPendingPinMove, landmarks = [], dense = false, }) {
+// ピンにマウスを重ねたときの吹き出し．マップ詳細では評価（#47）も足して渡す
+const defaultPinLabel = (pin) => pin.title;
+
+export function MapView({ map, pins = [], pendingPin = null, selectedPinId = null, onPinClick, onMapClick, onPinDoubleClick, movablePinId, onPinMove, onPendingPinMove, landmarks = [], dense = false, pinLabel = defaultPinLabel, }) {
   const { src: imageSrc, loading: imageLoading } = useMapImage(map?.image_url);
 
   // 拡大率（scale）、最大拡大率（maxScale）のStateを管理
@@ -680,7 +683,7 @@ export function MapView({ map, pins = [], pendingPin = null, selectedPinId = nul
                 ? "touch-none cursor-grab animate-pulse opacity-70 active:cursor-grabbing motion-reduce:animate-none"
                 : ""
                 }`}
-              title={pin.title}
+              title={pinLabel(pin)}
             >
               <PinMarker pin={pin} selected={isSelected} />
             </button>
